@@ -1,0 +1,11 @@
+[package]
+name = "shrev"
+version = "0.1.0"
+authors = ["Simon Rönnberg <simon.ronnberg@codemill.se>"]
+
+[dependencies]
+shred = "*"
+
+[[example]]
+name = "basic"
+path = "examples/basic.rs"
