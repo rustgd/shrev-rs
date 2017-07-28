@@ -1,5 +1,5 @@
-An retained mode event handler system, using ring buffer storage,
- based on [Shred][shred].
+An pull based event handler system, with events stored in a ring buffer,
+ using [Shred][shred].
  
 [shred]: https://github.com/slide-rs/shred
 
