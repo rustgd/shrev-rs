@@ -49,4 +49,4 @@ fn main() {
                event_handler.read::<TestEvent2>(&mut reader_id_2));
 
 }
-```rust
+```
