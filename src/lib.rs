@@ -103,6 +103,8 @@ impl<T: Clone + 'static + Debug> RingBufferStorage<T> {
         if num_written > self.max_size {
             let mut d = self.data.get(self.write_index..self.max_size).unwrap().to_vec();
             d.extend(self.data.get(0..self.write_index).unwrap().to_vec());
+            reader_id.read_index = self.write_index;
+            reader_id.written = self.written;
             return Err(RBError::LostData(d, num_written - self.max_size));
         }
         let read_data = if self.write_index >= reader_id.read_index {
@@ -134,6 +136,7 @@ impl<T : Debug> IndexMut<usize> for RingBufferStorage<T> {
 
 pub trait Event : Send + Sync + Clone + 'static {}
 
+const DEFAULT_MAX_SIZE: usize = 200;
 pub struct EventHandler {
     res : shred::Resources,
 }
@@ -164,7 +167,7 @@ impl EventHandler {
     }
 
     pub fn register<E : Event + Debug + Clone + PartialEq + Eq>(&mut self) {
-        self.register_with_size::<E>(200);
+        self.register_with_size::<E>(DEFAULT_MAX_SIZE);
     }
 
     pub fn register_with_size<E : Event + Debug + Clone + PartialEq + Eq>(&mut self, max_size : usize) {
