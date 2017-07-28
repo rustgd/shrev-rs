@@ -3,15 +3,11 @@ extern crate shred;
 use std::ops::{Index, IndexMut};
 use std::any::TypeId;
 
-const MAX_EVENTS: usize = 200;
-
 struct RingBufferStorage<T> {
     data : Vec<T>,
     write_index : usize,
     max_size : usize
 }
-
-pub trait Event : Send + Sync + Clone + 'static {}
 
 impl<T: Clone> RingBufferStorage<T> {
     pub fn new(size : usize) -> Self {
@@ -36,6 +32,8 @@ impl<T> IndexMut<usize> for RingBufferStorage<T> {
         &mut self.data[index]
     }
 }
+
+pub trait Event : Send + Sync + Clone + 'static {}
 
 #[derive(Hash, Eq, PartialEq, Copy, Clone)]
 pub struct ReaderId {
@@ -68,7 +66,7 @@ impl EventHandler {
     }
 
     pub fn register<E : Event>(&mut self) {
-        self.register_with_size::<E>(MAX_EVENTS);
+        self.register_with_size::<E>(200);
     }
 
     pub fn register_with_size<E : Event>(&mut self, max_size : usize) {
