@@ -4,7 +4,9 @@ use std::fmt::Debug;
 
 mod storage;
 
-use storage::{RingBufferStorage, ReaderId, RBError};
+use storage::{RingBufferStorage, RBError};
+
+pub use storage::ReaderId;
 
 pub trait Event : Send + Sync + Clone + 'static {}
 
@@ -14,14 +16,14 @@ pub struct EventHandler {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EventError<E : Debug + Clone + PartialEq + Eq> {
+pub enum EventError<E : Debug + Clone + PartialEq> {
     TooLargeWrite,
     LostData(Vec<E>, usize),
     InvalidReader,
     InvalidEventType
 }
 
-impl <E : Debug + Clone + PartialEq + Eq> Into<EventError<E>> for RBError<E> {
+impl <E : Debug + Clone + PartialEq> Into<EventError<E>> for RBError<E> {
     fn into(self) -> EventError<E> {
         match self {
             RBError::TooLargeWrite => EventError::TooLargeWrite,
@@ -38,11 +40,11 @@ impl EventHandler {
         }
     }
 
-    pub fn register<E : Event + Debug + Clone + PartialEq + Eq>(&mut self) {
+    pub fn register<E : Event + Debug + Clone + PartialEq>(&mut self) {
         self.register_with_size::<E>(DEFAULT_MAX_SIZE);
     }
 
-    pub fn register_with_size<E : Event + Debug + Clone + PartialEq + Eq>(&mut self, max_size : usize) {
+    pub fn register_with_size<E : Event + Debug + Clone + PartialEq>(&mut self, max_size : usize) {
         use shred::ResourceId;
 
         if self.res.has_value(ResourceId::new::<RingBufferStorage<E>>()) {
@@ -52,14 +54,14 @@ impl EventHandler {
         self.res.add(RingBufferStorage::<E>::new(max_size));
     }
 
-    pub fn register_reader<E : Event + Debug + Clone + PartialEq + Eq>(&mut self) -> Result<ReaderId, EventError<E>> {
+    pub fn register_reader<E : Event + Debug + Clone + PartialEq>(&mut self) -> Result<ReaderId, EventError<E>> {
         match self.res.try_fetch_mut::<RingBufferStorage<E>>(0) {
             Some(ref mut storage) => Ok(storage.new_reader_id()),
             None => Err(EventError::InvalidEventType)
         }
     }
 
-    pub fn write<E : Event + Debug + Clone + PartialEq + Eq>(&mut self, events: &mut Vec<E>) -> Result<(), EventError<E>> {
+    pub fn write<E : Event + Debug + Clone + PartialEq>(&mut self, events: &mut Vec<E>) -> Result<(), EventError<E>> {
         if events.len() == 0 {
             return Ok(());
         }
@@ -72,7 +74,7 @@ impl EventHandler {
         }
     }
 
-    pub fn write_single<E: Event + Debug + Clone + PartialEq + Eq>(&mut self, event: E) -> Result<(), EventError<E>> {
+    pub fn write_single<E: Event + Debug + Clone + PartialEq>(&mut self, event: E) -> Result<(), EventError<E>> {
         match self.res.try_fetch_mut::<RingBufferStorage<E>>(0) {
             Some(ref mut storage) => {
                 storage.write_single(event);
@@ -82,7 +84,7 @@ impl EventHandler {
         }
     }
 
-    pub fn read<E : Event + Debug + Clone + PartialEq + Eq>(&self, reader_id : &mut ReaderId) -> Result<Vec<E>, EventError<E>> {
+    pub fn read<E : Event + Debug + Clone + PartialEq>(&self, reader_id : &mut ReaderId) -> Result<Vec<E>, EventError<E>> {
         match self.res.try_fetch::<RingBufferStorage<E>>(0) {
             Some(ref storage) => {
                 match storage.read(reader_id) {

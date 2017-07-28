@@ -9,7 +9,7 @@ pub enum RBError<T : Debug> {
     InvalidReader
 }
 
-#[derive(Hash, Eq, PartialEq, Copy, Clone, Debug)]
+#[derive(Hash, PartialEq, Copy, Clone, Debug)]
 pub struct ReaderId {
     t : TypeId,
     id : u32,
