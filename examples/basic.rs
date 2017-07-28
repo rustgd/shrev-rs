@@ -1,6 +1,6 @@
 extern crate shrev;
 
-use shrev::*;
+use shrev::{Event, EventHandler};
 
 #[derive(Clone, Debug)]
 pub struct TestEvent {
