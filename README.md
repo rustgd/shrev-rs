@@ -1,5 +1,5 @@
-An pull based event handler system, with events stored in a ring buffer,
- using [Shred][shred].
+A pull based event handler, with events stored in a ring buffer,
+ using [Shred][shred] for synchronization.
  
 [shred]: https://github.com/slide-rs/shred
 
