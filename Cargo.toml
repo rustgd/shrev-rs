@@ -2,6 +2,15 @@
 name = "shrev"
 version = "0.1.0"
 authors = ["Simon Rönnberg <simon.ronnberg@codemill.se>"]
+repository = "https://github.com/Rhuagh/shrev-rs.git"
+homepage = "https://github.com/Rhuagh/shrev-rs.git"
+
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+documentation = "https://docs.rs/shrev"
+description = "Event handler, using shred for synchronization, allowing immutable reads."
+
+keywords = ["shred", "events"]
 
 [dependencies]
 shred = "0.4"
