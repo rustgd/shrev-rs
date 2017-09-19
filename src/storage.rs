@@ -5,12 +5,12 @@ use std::any::TypeId;
 use std::fmt::Debug;
 
 /// Ringbuffer errors
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum RBError<T: Debug> {
     /// If a writer tries to write more data than the max size of the ringbuffer, in a single call
     TooLargeWrite,
     /// If a reader is more than the entire ringbuffer behind in reading, this will be returned.
-    /// Contains the data that could be salvaged
+    /// Contains the data that could be salvaged, and the amount of data that was lost.
     LostData(Vec<T>, usize),
     /// If attempting to use a reader for a different data type than the storage contains.
     InvalidReader,
@@ -157,5 +157,93 @@ impl<T: Debug> Index<usize> for RingBufferStorage<T> {
 impl<T: Debug> IndexMut<usize> for RingBufferStorage<T> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.data[index]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::any::TypeId;
+
+    use super::*;
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct Test {
+        pub id : u32,
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct Test2 {
+        pub id : u32,
+    }
+
+    #[test]
+    fn test_empty_write() {
+        let mut buffer = RingBufferStorage::<Test>::new(10);
+        let r = buffer.write(&mut vec![]);
+        assert_eq!(Ok(()), r);
+    }
+
+    #[test]
+    fn test_too_large_write() {
+        let mut buffer = RingBufferStorage::<Test>::new(10);
+        let r = buffer.write(&mut events(15));
+        assert_eq!(Err(RBError::TooLargeWrite), r);
+    }
+
+    #[test]
+    fn test_invalid_reader() {
+        let buffer = RingBufferStorage::<Test>::new(10);
+        let mut reader_id = ReaderId::new(TypeId::of::<Test2>(), 4, 0, 0);
+        let r = buffer.read(&mut reader_id);
+        assert_eq!(Err(RBError::InvalidReader), r);
+    }
+
+    #[test]
+    fn test_empty_read() {
+        let mut buffer = RingBufferStorage::<Test>::new(10);
+        let mut reader_id = buffer.new_reader_id();
+        assert_eq!(Ok(vec![]), buffer.read(&mut reader_id));
+    }
+
+    #[test]
+    fn test_empty_read_write_before_id() {
+        let mut buffer = RingBufferStorage::<Test>::new(10);
+        assert_eq!(Ok(()), buffer.write(&mut events(2)));
+        let mut reader_id = buffer.new_reader_id();
+        assert_eq!(Ok(vec![]), buffer.read(&mut reader_id));
+    }
+
+    #[test]
+    fn test_read() {
+        let mut buffer = RingBufferStorage::<Test>::new(10);
+        let mut reader_id = buffer.new_reader_id();
+        assert_eq!(Ok(()), buffer.write(&mut events(2)));
+        assert_eq!(Ok(vec![Test { id : 0 }, Test { id: 1 }]), buffer.read(&mut reader_id));
+    }
+
+    #[test]
+    fn test_write_overflow() {
+        let mut buffer = RingBufferStorage::<Test>::new(3);
+        let mut reader_id = buffer.new_reader_id();
+        assert_eq!(Ok(()), buffer.write(&mut events(2)));
+        assert_eq!(Ok(()), buffer.write(&mut events(2)));
+        let r = buffer.read(&mut reader_id);
+        assert!(r.is_err());
+        let (has_lost_data, lost_data, lost_size) = match r {
+            Err(RBError::LostData(d, s)) => (true, d, s),
+            _ => (false, vec![], 0),
+        };
+        assert!(has_lost_data);
+        // we wrote 4 data points into a buffer of size 3, that means we've lost 1 data point
+        assert_eq!(1, lost_size);
+        // we wrote 0,1,0,1, we will be able to salvage the last 3 data points, since the buffer is
+        // of size 3
+        assert_eq!(vec![Test { id : 1 }, Test { id : 0 }, Test { id : 1 },], lost_data);
+    }
+
+    fn events(n: u32) -> Vec<Test> {
+        (0..n)
+            .map(|i| Test { id : i })
+            .collect::<Vec<_>>()
     }
 }
