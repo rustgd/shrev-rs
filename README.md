@@ -8,21 +8,17 @@ Example
 ```rust
 extern crate shrev;
 
-use shrev::{Event, EventHandler};
+use shrev::EventHandler;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TestEvent {
     data : u32
 }
 
-impl Event for TestEvent {}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TestEvent2 {
     data : u32
 }
-
-impl Event for TestEvent2 {}
 
 fn main() {
     let mut event_handler = EventHandler::new();
