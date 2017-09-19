@@ -48,7 +48,6 @@ pub struct RingBufferStorage<T: Debug> {
 }
 
 impl<T: Clone + 'static + Debug> RingBufferStorage<T> {
-
     /// Create a new ring buffer with the given max size.
     pub fn new(size: usize) -> Self {
         RingBufferStorage {
@@ -168,12 +167,12 @@ mod tests {
 
     #[derive(Debug, Clone, PartialEq)]
     struct Test {
-        pub id : u32,
+        pub id: u32,
     }
 
     #[derive(Debug, Clone, PartialEq)]
     struct Test2 {
-        pub id : u32,
+        pub id: u32,
     }
 
     #[test]
@@ -218,7 +217,10 @@ mod tests {
         let mut buffer = RingBufferStorage::<Test>::new(10);
         let mut reader_id = buffer.new_reader_id();
         assert_eq!(Ok(()), buffer.write(&mut events(2)));
-        assert_eq!(Ok(vec![Test { id : 0 }, Test { id: 1 }]), buffer.read(&mut reader_id));
+        assert_eq!(
+            Ok(vec![Test { id: 0 }, Test { id: 1 }]),
+            buffer.read(&mut reader_id)
+        );
     }
 
     #[test]
@@ -238,12 +240,13 @@ mod tests {
         assert_eq!(1, lost_size);
         // we wrote 0,1,0,1, we will be able to salvage the last 3 data points, since the buffer is
         // of size 3
-        assert_eq!(vec![Test { id : 1 }, Test { id : 0 }, Test { id : 1 },], lost_data);
+        assert_eq!(
+            vec![Test { id: 1 }, Test { id: 0 }, Test { id: 1 }],
+            lost_data
+        );
     }
 
     fn events(n: u32) -> Vec<Test> {
-        (0..n)
-            .map(|i| Test { id : i })
-            .collect::<Vec<_>>()
+        (0..n).map(|i| Test { id: i }).collect::<Vec<_>>()
     }
 }
