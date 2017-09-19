@@ -47,7 +47,7 @@ pub struct RingBufferStorage<T: Debug> {
     reset_written: usize,
 }
 
-impl<T: Clone + 'static + Debug> RingBufferStorage<T> {
+impl<T: Debug + Clone + 'static> RingBufferStorage<T> {
     /// Create a new ring buffer with the given max size.
     pub fn new(size: usize) -> Self {
         RingBufferStorage {

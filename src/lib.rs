@@ -18,10 +18,10 @@ mod storage;
 /// Marker trait for data to use with the EventHandler.
 ///
 /// Has an implementation for all types where its bounds are satisfied.
-pub trait Event: Debug + PartialEq + Send + Sync + Clone + 'static {}
+pub trait Event: Debug + Send + Sync + Clone + 'static {}
 impl<T> Event for T
 where
-    T: Debug + PartialEq + Send + Sync + Clone + 'static,
+    T: Debug + Send + Sync + Clone + 'static,
 {
 }
 
