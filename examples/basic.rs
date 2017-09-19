@@ -54,5 +54,4 @@ fn main() {
         Ok([TestEvent2 { data: 8 }, TestEvent2 { data: 9 }].to_vec()),
         event_handler.read::<TestEvent2>(&mut reader_id_2)
     );
-
 }

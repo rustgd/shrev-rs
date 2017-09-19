@@ -60,7 +60,9 @@ impl<E: Event> Into<EventError<E>> for RBError<E> {
 impl EventHandler {
     /// Create a new EventHandler
     pub fn new() -> EventHandler {
-        EventHandler { res: shred::Resources::new() }
+        EventHandler {
+            res: shred::Resources::new(),
+        }
     }
 
     /// Register an event type.
@@ -81,9 +83,8 @@ impl EventHandler {
     pub fn register_with_size<E: Event>(&mut self, max_size: usize) {
         use shred::ResourceId;
 
-        if self.res.has_value(
-            ResourceId::new::<RingBufferStorage<E>>(),
-        )
+        if self.res
+            .has_value(ResourceId::new::<RingBufferStorage<E>>())
         {
             return;
         }
@@ -109,12 +110,10 @@ impl EventHandler {
             return Ok(());
         }
         match self.res.try_fetch_mut::<RingBufferStorage<E>>(0) {
-            Some(ref mut storage) => {
-                match storage.write(events) {
-                    Ok(_) => Ok(()),
-                    Err(err) => Err(err.into()),
-                }
-            }
+            Some(ref mut storage) => match storage.write(events) {
+                Ok(_) => Ok(()),
+                Err(err) => Err(err.into()),
+            },
             None => Err(EventError::InvalidEventType),
         }
     }
@@ -133,12 +132,10 @@ impl EventHandler {
     /// Read any events that have been written to storage since the readers last read.
     pub fn read<E: Event>(&self, reader_id: &mut ReaderId) -> Result<Vec<E>, EventError<E>> {
         match self.res.try_fetch::<RingBufferStorage<E>>(0) {
-            Some(ref storage) => {
-                match storage.read(reader_id) {
-                    Ok(data) => Ok(data),
-                    Err(err) => Err(err.into()),
-                }
-            }
+            Some(ref storage) => match storage.read(reader_id) {
+                Ok(data) => Ok(data),
+                Err(err) => Err(err.into()),
+            },
             None => Err(EventError::InvalidEventType),
         }
     }
