@@ -1,8 +1,8 @@
 //! Ring buffer implementation, that does immutable reads.
 
-use std::ops::{Index, IndexMut};
 use std::any::TypeId;
 use std::fmt::Debug;
+use std::ops::{Index, IndexMut};
 
 /// Ringbuffer errors
 #[derive(Debug, PartialEq)]
@@ -161,9 +161,8 @@ impl<T: Debug> IndexMut<usize> for RingBufferStorage<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::any::TypeId;
-
     use super::*;
+    use std::any::TypeId;
 
     #[derive(Debug, Clone, PartialEq)]
     struct Test {
