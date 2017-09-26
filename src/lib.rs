@@ -7,8 +7,6 @@
 
 pub use storage::ReaderId;
 
-use std::fmt::Debug;
-
 use storage::{RBError, RingBufferStorage};
 
 mod storage;
@@ -16,20 +14,18 @@ mod storage;
 /// Marker trait for data to use with the EventHandler.
 ///
 /// Has an implementation for all types where its bounds are satisfied.
-pub trait Event: Debug + Send + Sync + Clone + 'static {}
+pub trait Event: Send + Sync + Clone + 'static {}
+
 impl<T> Event for T
 where
-    T: Debug + Send + Sync + Clone + 'static,
+    T: Send + Sync + Clone + 'static,
 {
 }
 
 const DEFAULT_MAX_SIZE: usize = 200;
 
 /// Event handler for managing many separate event types.
-pub struct EventHandler<E>
-where
-    E: Debug,
-{
+pub struct EventHandler<E> {
     storage: RingBufferStorage<E>,
 }
 

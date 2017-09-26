@@ -1,12 +1,11 @@
 //! Ring buffer implementation, that does immutable reads.
 
 use std::any::TypeId;
-use std::fmt::Debug;
 use std::ops::{Index, IndexMut};
 
 /// Ringbuffer errors
-#[derive(Debug, PartialEq)]
-pub enum RBError<T: Debug> {
+#[derive(PartialEq, Debug)]
+pub enum RBError<T> {
     /// If a writer tries to write more data than the max size of the ringbuffer, in a single call
     TooLargeWrite,
     /// If a reader is more than the entire ringbuffer behind in reading, this will be returned.
@@ -38,7 +37,7 @@ impl ReaderId {
 }
 
 /// Ring buffer, holding data of type `T`
-pub struct RingBufferStorage<T: Debug> {
+pub struct RingBufferStorage<T> {
     data: Vec<T>,
     write_index: usize,
     max_size: usize,
@@ -47,7 +46,7 @@ pub struct RingBufferStorage<T: Debug> {
     reset_written: usize,
 }
 
-impl<T: Debug + Clone + 'static> RingBufferStorage<T> {
+impl<T: Clone + 'static> RingBufferStorage<T> {
     /// Create a new ring buffer with the given max size.
     pub fn new(size: usize) -> Self {
         RingBufferStorage {
@@ -145,7 +144,7 @@ impl<T: Debug + Clone + 'static> RingBufferStorage<T> {
     }
 }
 
-impl<T: Debug> Index<usize> for RingBufferStorage<T> {
+impl<T> Index<usize> for RingBufferStorage<T> {
     type Output = T;
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -153,7 +152,7 @@ impl<T: Debug> Index<usize> for RingBufferStorage<T> {
     }
 }
 
-impl<T: Debug> IndexMut<usize> for RingBufferStorage<T> {
+impl<T> IndexMut<usize> for RingBufferStorage<T> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.data[index]
     }
