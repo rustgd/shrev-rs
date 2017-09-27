@@ -1,6 +1,6 @@
 extern crate shrev;
 
-use shrev::EventHandler;
+use shrev::{EventHandler, EventReadData};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TestEvent {
@@ -17,26 +17,24 @@ fn main() {
     let mut reader_id = event_handler.register_reader();
 
     // Should be empty, because reader was created after the write
-    assert_eq!(
-        Vec::<TestEvent>::default(),
-        event_handler
-            .read(&mut reader_id)
-            .unwrap()
-            .cloned()
-            .collect::<Vec<_>>()
-    );
+    match event_handler.read(&mut reader_id) {
+        Ok(EventReadData::Data(data)) => assert_eq!(
+            Vec::<TestEvent>::default(),
+            data.cloned().collect::<Vec<_>>()
+        ),
+        _ => panic!(),
+    }
 
     event_handler
         .write(&mut vec![TestEvent { data: 8 }, TestEvent { data: 9 }])
         .expect("");
 
     // Should have data, as a second write was done
-    assert_eq!(
-        vec![TestEvent { data: 8 }, TestEvent { data: 9 }],
-        event_handler
-            .read(&mut reader_id)
-            .unwrap()
-            .cloned()
-            .collect::<Vec<_>>()
-    );
+    match event_handler.read(&mut reader_id) {
+        Ok(EventReadData::Data(data)) => assert_eq!(
+            vec![TestEvent { data: 8 }, TestEvent { data: 9 }],
+            data.cloned().collect::<Vec<_>>()
+        ),
+        _ => panic!(),
+    }
 }

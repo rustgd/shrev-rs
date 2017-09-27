@@ -6,9 +6,11 @@
 #![deny(missing_docs)]
 
 pub use storage::RBError as EventError;
+pub use storage::ReadData as EventReadData;
 pub use storage::ReaderId;
+pub use storage::StorageIterator as EventIterator;
 
-use storage::{RingBufferStorage, StorageIterator};
+use storage::RingBufferStorage;
 
 mod storage;
 
@@ -56,7 +58,7 @@ where
     }
 
     /// Write a number of events into its storage.
-    pub fn write(&mut self, events: &mut Vec<E>) -> Result<(), EventError<E>> {
+    pub fn write(&mut self, events: &mut Vec<E>) -> Result<(), EventError> {
         if events.len() == 0 {
             return Ok(());
         }
@@ -70,7 +72,7 @@ where
     }
 
     /// Read any events that have been written to storage since the readers last read.
-    pub fn read(&self, reader_id: &mut ReaderId) -> Result<StorageIterator<E>, EventError<E>> {
+    pub fn read(&self, reader_id: &mut ReaderId) -> Result<EventReadData<E>, EventError> {
         self.storage.read(reader_id)
     }
 }
@@ -101,49 +103,40 @@ mod tests {
         let mut reader_id_extra = handler.register_reader();
 
         handler.write_single(Test { id: 1 });
-        assert_eq!(
-            vec![Test { id: 1 }],
-            handler
-                .read(&mut reader_id)
-                .unwrap()
-                .cloned()
-                .collect::<Vec<_>>()
-        );
+        match handler.read(&mut reader_id) {
+            Ok(EventReadData::Data(data)) => {
+                assert_eq!(vec![Test { id: 1 }], data.cloned().collect::<Vec<_>>())
+            }
+            _ => panic!(),
+        }
 
         handler.write_single(Test { id: 2 });
-        assert_eq!(
-            vec![Test { id: 2 }],
-            handler
-                .read(&mut reader_id)
-                .unwrap()
-                .cloned()
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            vec![Test { id: 1 }, Test { id: 2 }],
-            handler
-                .read(&mut reader_id_extra)
-                .unwrap()
-                .cloned()
-                .collect::<Vec<_>>()
-        );
+        match handler.read(&mut reader_id) {
+            Ok(EventReadData::Data(data)) => {
+                assert_eq!(vec![Test { id: 2 }], data.cloned().collect::<Vec<_>>())
+            }
+            _ => panic!(),
+        }
+        match handler.read(&mut reader_id_extra) {
+            Ok(EventReadData::Data(data)) => assert_eq!(
+                vec![Test { id: 1 }, Test { id: 2 }],
+                data.cloned().collect::<Vec<_>>()
+            ),
+            _ => panic!(),
+        }
 
         handler.write_single(Test { id: 3 });
-        assert_eq!(
-            vec![Test { id: 3 }],
-            handler
-                .read(&mut reader_id)
-                .unwrap()
-                .cloned()
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            vec![Test { id: 3 }],
-            handler
-                .read(&mut reader_id_extra)
-                .unwrap()
-                .cloned()
-                .collect::<Vec<_>>()
-        );
+        match handler.read(&mut reader_id) {
+            Ok(EventReadData::Data(data)) => {
+                assert_eq!(vec![Test { id: 3 }], data.cloned().collect::<Vec<_>>())
+            }
+            _ => panic!(),
+        }
+        match handler.read(&mut reader_id_extra) {
+            Ok(EventReadData::Data(data)) => {
+                assert_eq!(vec![Test { id: 3 }], data.cloned().collect::<Vec<_>>())
+            }
+            _ => panic!(),
+        }
     }
 }
