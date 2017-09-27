@@ -16,9 +16,15 @@ fn main() {
 
     let mut reader_id = event_handler.register_reader();
 
-
     // Should be empty, because reader was created after the write
-    assert_eq!(Ok([].to_vec()), event_handler.read(&mut reader_id));
+    assert_eq!(
+        Vec::<TestEvent>::default(),
+        event_handler
+            .read(&mut reader_id)
+            .unwrap()
+            .cloned()
+            .collect::<Vec<_>>()
+    );
 
     event_handler
         .write(&mut vec![TestEvent { data: 8 }, TestEvent { data: 9 }])
@@ -26,7 +32,11 @@ fn main() {
 
     // Should have data, as a second write was done
     assert_eq!(
-        Ok([TestEvent { data: 8 }, TestEvent { data: 9 }].to_vec()),
-        event_handler.read(&mut reader_id)
+        vec![TestEvent { data: 8 }, TestEvent { data: 9 }],
+        event_handler
+            .read(&mut reader_id)
+            .unwrap()
+            .cloned()
+            .collect::<Vec<_>>()
     );
 }
