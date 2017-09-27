@@ -5,20 +5,21 @@
 
 #![deny(missing_docs)]
 
+pub use storage::RBError as EventError;
 pub use storage::ReaderId;
 
-use storage::{RBError, RingBufferStorage};
+use storage::{RingBufferStorage, StorageIterator};
 
 mod storage;
 
 /// Marker trait for data to use with the EventHandler.
 ///
 /// Has an implementation for all types where its bounds are satisfied.
-pub trait Event: Send + Sync + Clone + 'static {}
+pub trait Event: Send + Sync + 'static {}
 
 impl<T> Event for T
 where
-    T: Send + Sync + Clone + 'static,
+    T: Send + Sync + 'static,
 {
 }
 
@@ -27,28 +28,6 @@ const DEFAULT_MAX_SIZE: usize = 200;
 /// Event handler for managing many separate event types.
 pub struct EventHandler<E> {
     storage: RingBufferStorage<E>,
-}
-
-/// Possible errors returned by the EventHandler
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EventError<E: Event> {
-    /// If a writer tries to write more data than the max size of the ringbuffer, in a single call
-    TooLargeWrite,
-    /// If a reader is more than the entire ringbuffer behind in reading, this will be returned.
-    /// Contains the data that could be salvaged
-    LostData(Vec<E>, usize),
-    /// If attempting to use a reader for a different data type than the storage contains.
-    InvalidReader,
-}
-
-impl<E: Event> Into<EventError<E>> for RBError<E> {
-    fn into(self) -> EventError<E> {
-        match self {
-            RBError::TooLargeWrite => EventError::TooLargeWrite,
-            RBError::InvalidReader => EventError::InvalidReader,
-            RBError::LostData(retained, missed_num) => EventError::LostData(retained, missed_num),
-        }
-    }
 }
 
 impl<E> EventHandler<E>
@@ -82,7 +61,7 @@ where
             return Ok(());
         }
 
-        self.storage.write(events).map_err(|e| e.into())
+        self.storage.write(events)
     }
 
     /// Write a single event into storage.
@@ -91,8 +70,8 @@ where
     }
 
     /// Read any events that have been written to storage since the readers last read.
-    pub fn read(&self, reader_id: &mut ReaderId) -> Result<Vec<E>, EventError<E>> {
-        self.storage.read(reader_id).map_err(|e| e.into())
+    pub fn read(&self, reader_id: &mut ReaderId) -> Result<StorageIterator<E>, EventError<E>> {
+        self.storage.read(reader_id)
     }
 }
 
@@ -122,17 +101,49 @@ mod tests {
         let mut reader_id_extra = handler.register_reader();
 
         handler.write_single(Test { id: 1 });
-        assert_eq!(Ok(vec![Test { id: 1 }]), handler.read(&mut reader_id));
+        assert_eq!(
+            vec![Test { id: 1 }],
+            handler
+                .read(&mut reader_id)
+                .unwrap()
+                .cloned()
+                .collect::<Vec<_>>()
+        );
 
         handler.write_single(Test { id: 2 });
-        assert_eq!(Ok(vec![Test { id: 2 }]), handler.read(&mut reader_id));
         assert_eq!(
-            Ok(vec![Test { id: 1 }, Test { id: 2 }]),
-            handler.read(&mut reader_id_extra)
+            vec![Test { id: 2 }],
+            handler
+                .read(&mut reader_id)
+                .unwrap()
+                .cloned()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![Test { id: 1 }, Test { id: 2 }],
+            handler
+                .read(&mut reader_id_extra)
+                .unwrap()
+                .cloned()
+                .collect::<Vec<_>>()
         );
 
         handler.write_single(Test { id: 3 });
-        assert_eq!(Ok(vec![Test { id: 3 }]), handler.read(&mut reader_id));
-        assert_eq!(Ok(vec![Test { id: 3 }]), handler.read(&mut reader_id_extra));
+        assert_eq!(
+            vec![Test { id: 3 }],
+            handler
+                .read(&mut reader_id)
+                .unwrap()
+                .cloned()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![Test { id: 3 }],
+            handler
+                .read(&mut reader_id_extra)
+                .unwrap()
+                .cloned()
+                .collect::<Vec<_>>()
+        );
     }
 }

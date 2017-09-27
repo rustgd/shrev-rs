@@ -1,18 +1,39 @@
 //! Ring buffer implementation, that does immutable reads.
 
 use std::any::TypeId;
+use std::fmt;
 use std::ops::{Index, IndexMut};
 
 /// Ringbuffer errors
-#[derive(PartialEq, Debug)]
-pub enum RBError<T> {
+pub enum RBError<'a, T: 'a> {
     /// If a writer tries to write more data than the max size of the ringbuffer, in a single call
     TooLargeWrite,
     /// If a reader is more than the entire ringbuffer behind in reading, this will be returned.
     /// Contains the data that could be salvaged, and the amount of data that was lost.
-    LostData(Vec<T>, usize),
+    LostData(StorageIterator<'a, T>, usize),
     /// If attempting to use a reader for a different data type than the storage contains.
     InvalidReader,
+}
+
+impl<'a, T: 'a> fmt::Debug for RBError<'a, T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            RBError::TooLargeWrite => write!(f, "TooLargeWrite"),
+            RBError::InvalidReader => write!(f, "InvalidReader"),
+            RBError::LostData(..) => write!(f, "LostData"),
+        }
+    }
+}
+
+impl<'a, T: 'a> PartialEq for RBError<'a, T> {
+    fn eq(&self, other: &RBError<'a, T>) -> bool {
+        match (self, other) {
+            (&RBError::TooLargeWrite, &RBError::TooLargeWrite) => true,
+            (&RBError::InvalidReader, &RBError::InvalidReader) => true,
+            (&RBError::LostData(..), &RBError::LostData(..)) => true,
+            _ => false,
+        }
+    }
 }
 
 /// The reader id is used by readers to tell the storage where the last read ended.
@@ -38,7 +59,7 @@ impl ReaderId {
 
 /// Ring buffer, holding data of type `T`
 pub struct RingBufferStorage<T> {
-    data: Vec<T>,
+    pub(crate) data: Vec<T>,
     write_index: usize,
     max_size: usize,
     written: usize,
@@ -46,7 +67,7 @@ pub struct RingBufferStorage<T> {
     reset_written: usize,
 }
 
-impl<T: Clone + 'static> RingBufferStorage<T> {
+impl<T: 'static> RingBufferStorage<T> {
     /// Create a new ring buffer with the given max size.
     pub fn new(size: usize) -> Self {
         RingBufferStorage {
@@ -106,7 +127,7 @@ impl<T: Clone + 'static> RingBufferStorage<T> {
 
     /// Read data from the ringbuffer, starting where the last read ended, and up to where the last
     /// data was written.
-    pub fn read(&self, reader_id: &mut ReaderId) -> Result<Vec<T>, RBError<T>> {
+    pub fn read(&self, reader_id: &mut ReaderId) -> Result<StorageIterator<T>, RBError<T>> {
         if reader_id.t != TypeId::of::<T>() {
             return Err(RBError::InvalidReader);
         }
@@ -115,32 +136,58 @@ impl<T: Clone + 'static> RingBufferStorage<T> {
         } else {
             self.written - reader_id.written
         };
-        if num_written > self.max_size {
-            let mut d = self.data
-                .get(self.write_index..self.max_size)
-                .unwrap()
-                .to_vec();
-            d.extend(self.data.get(0..self.write_index).unwrap().to_vec());
-            reader_id.read_index = self.write_index;
-            reader_id.written = self.written;
-            return Err(RBError::LostData(d, num_written - self.max_size));
-        }
-        let read_data = if self.write_index >= reader_id.read_index {
-            self.data
-                .get(reader_id.read_index..self.write_index)
-                .unwrap()
-                .to_vec()
-        } else {
-            let mut d = self.data
-                .get(reader_id.read_index..self.max_size)
-                .unwrap()
-                .to_vec();
-            d.extend(self.data.get(0..self.write_index).unwrap().to_vec());
-            d
-        };
+
+        let read_index = reader_id.read_index;
         reader_id.read_index = self.write_index;
         reader_id.written = self.written;
-        Ok(read_data)
+
+        if num_written > self.max_size {
+            Err(RBError::LostData(
+                StorageIterator {
+                    storage: &self,
+                    current: self.write_index,
+                    end: self.write_index,
+                    started: false,
+                },
+                num_written - self.max_size,
+            ))
+        } else {
+            Ok(StorageIterator {
+                storage: &self,
+                current: read_index,
+                end: self.write_index,
+                // handle corner case no data to read
+                started: num_written == 0,
+            })
+        }
+    }
+}
+
+/// Iterator over a slice of data in `RingbufferStorage`.
+pub struct StorageIterator<'a, T: 'a> {
+    storage: &'a RingBufferStorage<T>,
+    current: usize,
+    end: usize,
+    // needed when we should read the whole buffer, because then current == end for the first value
+    // needs special handling for empty iterator, needs to be forced to true for that corner case
+    started: bool,
+}
+
+impl<'a, T> Iterator for StorageIterator<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<&'a T> {
+        if self.started && self.current == self.end {
+            None
+        } else {
+            self.started = true;
+            let t = &self.storage[self.current];
+            self.current += 1;
+            if self.current == self.storage.data.len() && self.end != self.storage.data.len() {
+                self.current = 0;
+            }
+            Some(t)
+        }
     }
 }
 
@@ -177,14 +224,15 @@ mod tests {
     fn test_empty_write() {
         let mut buffer = RingBufferStorage::<Test>::new(10);
         let r = buffer.write(&mut vec![]);
-        assert_eq!(Ok(()), r);
+        assert!(r.is_ok());
     }
 
     #[test]
     fn test_too_large_write() {
         let mut buffer = RingBufferStorage::<Test>::new(10);
         let r = buffer.write(&mut events(15));
-        assert_eq!(Err(RBError::TooLargeWrite), r);
+        assert!(r.is_err());
+        assert_eq!(RBError::TooLargeWrite, r.unwrap_err());
     }
 
     #[test]
@@ -192,14 +240,25 @@ mod tests {
         let buffer = RingBufferStorage::<Test>::new(10);
         let mut reader_id = ReaderId::new(TypeId::of::<Test2>(), 4, 0, 0);
         let r = buffer.read(&mut reader_id);
-        assert_eq!(Err(RBError::InvalidReader), r);
+        assert!(r.is_err());
+        match r {
+            Err(RBError::InvalidReader) => (),
+            _ => panic!(),
+        }
     }
 
     #[test]
     fn test_empty_read() {
         let mut buffer = RingBufferStorage::<Test>::new(10);
         let mut reader_id = buffer.new_reader_id();
-        assert_eq!(Ok(vec![]), buffer.read(&mut reader_id));
+        assert_eq!(
+            Vec::<Test>::default(),
+            buffer
+                .read(&mut reader_id)
+                .unwrap()
+                .cloned()
+                .collect::<Vec<Test>>()
+        );
     }
 
     #[test]
@@ -207,7 +266,14 @@ mod tests {
         let mut buffer = RingBufferStorage::<Test>::new(10);
         assert_eq!(Ok(()), buffer.write(&mut events(2)));
         let mut reader_id = buffer.new_reader_id();
-        assert_eq!(Ok(vec![]), buffer.read(&mut reader_id));
+        assert_eq!(
+            Vec::<Test>::default(),
+            buffer
+                .read(&mut reader_id)
+                .unwrap()
+                .cloned()
+                .collect::<Vec<Test>>()
+        );
     }
 
     #[test]
@@ -216,8 +282,12 @@ mod tests {
         let mut reader_id = buffer.new_reader_id();
         assert_eq!(Ok(()), buffer.write(&mut events(2)));
         assert_eq!(
-            Ok(vec![Test { id: 0 }, Test { id: 1 }]),
-            buffer.read(&mut reader_id)
+            vec![Test { id: 0 }, Test { id: 1 }],
+            buffer
+                .read(&mut reader_id)
+                .unwrap()
+                .cloned()
+                .collect::<Vec<Test>>()
         );
     }
 
@@ -230,7 +300,7 @@ mod tests {
         let r = buffer.read(&mut reader_id);
         assert!(r.is_err());
         let (has_lost_data, lost_data, lost_size) = match r {
-            Err(RBError::LostData(d, s)) => (true, d, s),
+            Err(RBError::LostData(d, s)) => (true, d.cloned().collect::<Vec<_>>(), s),
             _ => (false, vec![], 0),
         };
         assert!(has_lost_data);
