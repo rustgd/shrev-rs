@@ -1,6 +1,6 @@
 [package]
 name = "shrev"
-version = "0.3.1"
+version = "0.3.2"
 authors = ["Simon Rönnberg <simon.ronnberg@codemill.se>"]
 repository = "https://github.com/Rhuagh/shrev-rs.git"
 homepage = "https://github.com/Rhuagh/shrev-rs.git"
