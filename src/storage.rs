@@ -1,28 +1,15 @@
 //! Ring buffer implementation, that does immutable reads.
 
 use std::any::TypeId;
-use std::fmt;
 use std::ops::{Index, IndexMut};
 
 /// Ringbuffer errors
-pub enum RBError<'a, T: 'a> {
+#[derive(Debug, PartialEq)]
+pub enum RBError {
     /// If a writer tries to write more data than the max size of the ringbuffer, in a single call
     TooLargeWrite,
-    /// If a reader is more than the entire ringbuffer behind in reading, this will be returned.
-    /// Contains the data that could be salvaged, and the amount of data that was lost.
-    LostData(StorageIterator<'a, T>, usize),
     /// If attempting to use a reader for a different data type than the storage contains.
     InvalidReader,
-}
-
-impl<'a, T: 'a> fmt::Debug for RBError<'a, T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            RBError::TooLargeWrite => write!(f, "TooLargeWrite"),
-            RBError::InvalidReader => write!(f, "InvalidReader"),
-            RBError::LostData(..) => write!(f, "LostData"),
-        }
-    }
 }
 
 /// The reader id is used by readers to tell the storage where the last read ended.
@@ -70,7 +57,7 @@ impl<T: 'static> RingBufferStorage<T> {
     }
 
     /// Write a set of data into the ringbuffer.
-    pub fn write(&mut self, data: &mut Vec<T>) -> Result<(), RBError<T>> {
+    pub fn write(&mut self, data: &mut Vec<T>) -> Result<(), RBError> {
         if data.len() == 0 {
             return Ok(());
         }
@@ -116,7 +103,7 @@ impl<T: 'static> RingBufferStorage<T> {
 
     /// Read data from the ringbuffer, starting where the last read ended, and up to where the last
     /// data was written.
-    pub fn read(&self, reader_id: &mut ReaderId) -> Result<StorageIterator<T>, RBError<T>> {
+    pub fn read(&self, reader_id: &mut ReaderId) -> Result<ReadData<T>, RBError> {
         if reader_id.t != TypeId::of::<T>() {
             return Err(RBError::InvalidReader);
         }
@@ -131,7 +118,7 @@ impl<T: 'static> RingBufferStorage<T> {
         reader_id.written = self.written;
 
         if num_written > self.max_size {
-            Err(RBError::LostData(
+            Ok(ReadData::Overflow(
                 StorageIterator {
                     storage: &self,
                     current: self.write_index,
@@ -141,18 +128,28 @@ impl<T: 'static> RingBufferStorage<T> {
                 num_written - self.max_size,
             ))
         } else {
-            Ok(StorageIterator {
+            Ok(ReadData::Data(StorageIterator {
                 storage: &self,
                 current: read_index,
                 end: self.write_index,
                 // handle corner case no data to read
                 started: num_written == 0,
-            })
+            }))
         }
     }
 }
 
-/// Iterator over a slice of data in `RingbufferStorage`.
+/// Wrapper for read data. Needed because of overflow situations.
+pub enum ReadData<'a, T: 'a> {
+    /// Normal read scenario, only contains an `Iterator` over the data.
+    Data(StorageIterator<'a, T>),
+
+    /// Overflow scenario, contains an `Iterator` for the recovered data, and an indicator of how
+    /// much data was lost.
+    Overflow(StorageIterator<'a, T>, usize),
+}
+
+/// Iterator over a slice of data in `RingBufferStorage`.
 pub struct StorageIterator<'a, T: 'a> {
     storage: &'a RingBufferStorage<T>,
     current: usize,
@@ -243,14 +240,12 @@ mod tests {
     fn test_empty_read() {
         let mut buffer = RingBufferStorage::<Test>::new(10);
         let mut reader_id = buffer.new_reader_id();
-        assert_eq!(
-            Vec::<Test>::default(),
-            buffer
-                .read(&mut reader_id)
-                .unwrap()
-                .cloned()
-                .collect::<Vec<Test>>()
-        );
+        match buffer.read(&mut reader_id) {
+            Ok(ReadData::Data(data)) => {
+                assert_eq!(Vec::<Test>::default(), data.cloned().collect::<Vec<_>>())
+            }
+            _ => panic!(),
+        }
     }
 
     #[test]
@@ -258,14 +253,12 @@ mod tests {
         let mut buffer = RingBufferStorage::<Test>::new(10);
         assert!(buffer.write(&mut events(2)).is_ok());
         let mut reader_id = buffer.new_reader_id();
-        assert_eq!(
-            Vec::<Test>::default(),
-            buffer
-                .read(&mut reader_id)
-                .unwrap()
-                .cloned()
-                .collect::<Vec<Test>>()
-        );
+        match buffer.read(&mut reader_id) {
+            Ok(ReadData::Data(data)) => {
+                assert_eq!(Vec::<Test>::default(), data.cloned().collect::<Vec<_>>())
+            }
+            _ => panic!(),
+        }
     }
 
     #[test]
@@ -273,14 +266,13 @@ mod tests {
         let mut buffer = RingBufferStorage::<Test>::new(10);
         let mut reader_id = buffer.new_reader_id();
         assert!(buffer.write(&mut events(2)).is_ok());
-        assert_eq!(
-            vec![Test { id: 0 }, Test { id: 1 }],
-            buffer
-                .read(&mut reader_id)
-                .unwrap()
-                .cloned()
-                .collect::<Vec<Test>>()
-        );
+        match buffer.read(&mut reader_id) {
+            Ok(ReadData::Data(data)) => assert_eq!(
+                vec![Test { id: 0 }, Test { id: 1 }],
+                data.cloned().collect::<Vec<_>>()
+            ),
+            _ => panic!(),
+        }
     }
 
     #[test]
@@ -290,20 +282,20 @@ mod tests {
         assert!(buffer.write(&mut events(2)).is_ok());
         assert!(buffer.write(&mut events(2)).is_ok());
         let r = buffer.read(&mut reader_id);
-        assert!(r.is_err());
-        let (has_lost_data, lost_data, lost_size) = match r {
-            Err(RBError::LostData(d, s)) => (true, d.cloned().collect::<Vec<_>>(), s),
-            _ => (false, vec![], 0),
-        };
-        assert!(has_lost_data);
-        // we wrote 4 data points into a buffer of size 3, that means we've lost 1 data point
-        assert_eq!(1, lost_size);
-        // we wrote 0,1,0,1, we will be able to salvage the last 3 data points, since the buffer is
-        // of size 3
-        assert_eq!(
-            vec![Test { id: 1 }, Test { id: 0 }, Test { id: 1 }],
-            lost_data
-        );
+        match r {
+            Ok(ReadData::Overflow(lost_data, lost_size)) => {
+                // we wrote 4 data points into a buffer of size 3, that means we've lost 1 data
+                // point
+                assert_eq!(1, lost_size);
+                // we wrote 0,1,0,1, we will be able to salvage the last 3 data points, since the
+                // buffer is of size 3
+                assert_eq!(
+                    vec![Test { id: 1 }, Test { id: 0 }, Test { id: 1 }],
+                    lost_data.cloned().collect::<Vec<_>>()
+                );
+            }
+            _ => panic!(),
+        }
     }
 
     fn events(n: u32) -> Vec<Test> {
