@@ -27,7 +27,7 @@ where
 
 const DEFAULT_MAX_SIZE: usize = 200;
 
-/// Event handler for managing many separate event types.
+/// Event handler
 pub struct EventHandler<E> {
     storage: RingBufferStorage<E>,
 }
