@@ -27,7 +27,7 @@ where
 
 const DEFAULT_MAX_SIZE: usize = 200;
 
-/// Event handler for managing many separate event types.
+/// Event handler
 pub struct EventHandler<E> {
     storage: RingBufferStorage<E>,
 }
@@ -53,7 +53,7 @@ where
     /// To be able to read events, a reader id is required. This is because otherwise the handler
     /// wouldn't know where in the ringbuffer the reader has read to earlier. This information is
     /// stored in the reader id.
-    pub fn register_reader(&mut self) -> ReaderId {
+    pub fn register_reader(&self) -> ReaderId {
         self.storage.new_reader_id()
     }
 
@@ -90,9 +90,9 @@ mod tests {
 
     #[test]
     fn test_register_reader() {
-        let mut handler = EventHandler::<Test>::with_capacity(14);
+        let handler = EventHandler::<Test>::with_capacity(14);
         let reader_id = handler.register_reader();
-        assert_eq!(ReaderId::new(TypeId::of::<Test>(), 1, 0, 0), reader_id);
+        assert_eq!(ReaderId::new(TypeId::of::<Test>(), 0, 0), reader_id);
     }
 
     #[test]

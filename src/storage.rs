@@ -16,17 +16,15 @@ pub enum RBError {
 #[derive(Hash, PartialEq, Copy, Clone, Debug)]
 pub struct ReaderId {
     t: TypeId,
-    id: u32,
     read_index: usize,
     written: usize,
 }
 
 impl ReaderId {
     /// Create a new reader id
-    pub fn new(t: TypeId, id: u32, reader_index: usize, written: usize) -> ReaderId {
+    pub fn new(t: TypeId, reader_index: usize, written: usize) -> ReaderId {
         ReaderId {
             t,
-            id,
             read_index: reader_index,
             written,
         }
@@ -39,7 +37,6 @@ pub struct RingBufferStorage<T> {
     write_index: usize,
     max_size: usize,
     written: usize,
-    next_reader_id: u32,
     reset_written: usize,
 }
 
@@ -51,7 +48,6 @@ impl<T: 'static> RingBufferStorage<T> {
             write_index: 0,
             max_size: size,
             written: 0,
-            next_reader_id: 1,
             reset_written: size * 1000,
         }
     }
@@ -90,14 +86,8 @@ impl<T: 'static> RingBufferStorage<T> {
     }
 
     /// Create a new reader id for this ringbuffer.
-    pub fn new_reader_id(&mut self) -> ReaderId {
-        let reader_id = ReaderId::new(
-            TypeId::of::<T>(),
-            self.next_reader_id,
-            self.write_index,
-            self.written,
-        );
-        self.next_reader_id += 1;
+    pub fn new_reader_id(&self) -> ReaderId {
+        let reader_id = ReaderId::new(TypeId::of::<T>(), self.write_index, self.written);
         reader_id
     }
 
@@ -227,7 +217,7 @@ mod tests {
     #[test]
     fn test_invalid_reader() {
         let buffer = RingBufferStorage::<Test>::new(10);
-        let mut reader_id = ReaderId::new(TypeId::of::<Test2>(), 4, 0, 0);
+        let mut reader_id = ReaderId::new(TypeId::of::<Test2>(), 0, 0);
         let r = buffer.read(&mut reader_id);
         assert!(r.is_err());
         match r {
@@ -238,7 +228,7 @@ mod tests {
 
     #[test]
     fn test_empty_read() {
-        let mut buffer = RingBufferStorage::<Test>::new(10);
+        let buffer = RingBufferStorage::<Test>::new(10);
         let mut reader_id = buffer.new_reader_id();
         match buffer.read(&mut reader_id) {
             Ok(ReadData::Data(data)) => {
