@@ -57,13 +57,16 @@ where
         self.storage.new_reader_id()
     }
 
-    /// Write a number of events into its storage.
-    pub fn write(&mut self, events: &mut Vec<E>) -> Result<(), EventError> {
-        if events.len() == 0 {
-            return Ok(());
-        }
+    /// Write a slice of events into storage
+    pub fn write_slice(&mut self, events: &[E]) -> Result<(), EventError>
+    where E: Clone,
+    {
+        self.storage.write_slice(events)
+    }
 
-        self.storage.write(events)
+    /// Drain a vector of events into storage.
+    pub fn drain_vec_write(&mut self, events: &mut Vec<E>) -> Result<(), EventError> {
+        self.storage.drain_vec_write(events)
     }
 
     /// Write a single event into storage.
