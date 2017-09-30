@@ -11,7 +11,7 @@ fn main() {
     let mut event_handler = EventHandler::new();
 
     event_handler
-        .write(&mut vec![TestEvent { data: 1 }, TestEvent { data: 2 }])
+        .drain_vec_write(&mut vec![TestEvent { data: 1 }, TestEvent { data: 2 }])
         .expect("");
 
     let mut reader_id = event_handler.register_reader();
@@ -26,7 +26,7 @@ fn main() {
     }
 
     event_handler
-        .write(&mut vec![TestEvent { data: 8 }, TestEvent { data: 9 }])
+        .drain_vec_write(&mut vec![TestEvent { data: 8 }, TestEvent { data: 9 }])
         .expect("");
 
     // Should have data, as a second write was done

@@ -13,7 +13,7 @@ pub enum RBError {
 }
 
 /// The reader id is used by readers to tell the storage where the last read ended.
-#[derive(Hash, PartialEq, Copy, Clone, Debug)]
+#[derive(Hash, PartialEq, Clone, Debug)]
 pub struct ReaderId {
     t: TypeId,
     read_index: usize,
@@ -52,11 +52,21 @@ impl<T: 'static> RingBufferStorage<T> {
         }
     }
 
-    /// Write a set of data into the ringbuffer.
-    pub fn write(&mut self, data: &mut Vec<T>) -> Result<(), RBError> {
-        if data.len() == 0 {
-            return Ok(());
+    /// Write a slice of events into the ringbuffer.
+    pub fn write_slice(&mut self, data: &[T]) -> Result<(), RBError>
+    where T: Clone,
+    {
+        if data.len() > self.max_size {
+            return Err(RBError::TooLargeWrite);
         }
+        for d in data {
+            self.write_single(d.clone());
+        }
+        Ok(())
+    }
+
+    /// Write a Vec of data into the ringbuffer.
+    pub fn drain_vec_write(&mut self, data: &mut Vec<T>) -> Result<(), RBError> {
         if data.len() > self.max_size {
             return Err(RBError::TooLargeWrite);
         }
@@ -199,14 +209,14 @@ mod tests {
     #[test]
     fn test_empty_write() {
         let mut buffer = RingBufferStorage::<Test>::new(10);
-        let r = buffer.write(&mut vec![]);
+        let r = buffer.drain_vec_write(&mut vec![]);
         assert!(r.is_ok());
     }
 
     #[test]
     fn test_too_large_write() {
         let mut buffer = RingBufferStorage::<Test>::new(10);
-        let r = buffer.write(&mut events(15));
+        let r = buffer.drain_vec_write(&mut events(15));
         assert!(r.is_err());
         match r {
             Err(RBError::TooLargeWrite) => (),
@@ -241,7 +251,7 @@ mod tests {
     #[test]
     fn test_empty_read_write_before_id() {
         let mut buffer = RingBufferStorage::<Test>::new(10);
-        assert!(buffer.write(&mut events(2)).is_ok());
+        assert!(buffer.drain_vec_write(&mut events(2)).is_ok());
         let mut reader_id = buffer.new_reader_id();
         match buffer.read(&mut reader_id) {
             Ok(ReadData::Data(data)) => {
@@ -255,7 +265,7 @@ mod tests {
     fn test_read() {
         let mut buffer = RingBufferStorage::<Test>::new(10);
         let mut reader_id = buffer.new_reader_id();
-        assert!(buffer.write(&mut events(2)).is_ok());
+        assert!(buffer.drain_vec_write(&mut events(2)).is_ok());
         match buffer.read(&mut reader_id) {
             Ok(ReadData::Data(data)) => assert_eq!(
                 vec![Test { id: 0 }, Test { id: 1 }],
@@ -269,8 +279,8 @@ mod tests {
     fn test_write_overflow() {
         let mut buffer = RingBufferStorage::<Test>::new(3);
         let mut reader_id = buffer.new_reader_id();
-        assert!(buffer.write(&mut events(2)).is_ok());
-        assert!(buffer.write(&mut events(2)).is_ok());
+        assert!(buffer.drain_vec_write(&mut events(2)).is_ok());
+        assert!(buffer.drain_vec_write(&mut events(2)).is_ok());
         let r = buffer.read(&mut reader_id);
         match r {
             Ok(ReadData::Overflow(lost_data, lost_size)) => {
@@ -282,6 +292,22 @@ mod tests {
                 assert_eq!(
                     vec![Test { id: 1 }, Test { id: 0 }, Test { id: 1 }],
                     lost_data.cloned().collect::<Vec<_>>()
+                );
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn test_write_slice() {
+        let mut buffer = RingBufferStorage::<Test>::new(10);
+        let mut reader_id = buffer.new_reader_id();
+        assert!(buffer.write_slice(&events(2)).is_ok());
+        match buffer.read(&mut reader_id) {
+            Ok(ReadData::Data(data)) => {
+                assert_eq!(
+                    vec![Test { id: 0 }, Test { id: 1 }],
+                    data.cloned().collect::<Vec<_>>()
                 );
             }
             _ => panic!(),
