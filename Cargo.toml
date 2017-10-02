@@ -8,7 +8,7 @@ homepage = "https://github.com/Rhuagh/shrev-rs.git"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 documentation = "https://docs.rs/shrev"
-description = "Event handler, meant to be used with `specs`."
+description = "Event channel, meant to be used with `specs`."
 
 keywords = ["specs", "events"]
 
