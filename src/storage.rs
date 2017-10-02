@@ -53,14 +53,15 @@ impl<T: 'static> RingBufferStorage<T> {
     }
 
     /// Write a slice of events into the ringbuffer.
-    pub fn write_slice(&mut self, data: &[T]) -> Result<(), RBError>
-    where T: Clone,
+    pub fn slice_write(&mut self, data: &[T]) -> Result<(), RBError>
+    where
+        T: Clone,
     {
         if data.len() > self.max_size {
             return Err(RBError::TooLargeWrite);
         }
         for d in data {
-            self.write_single(d.clone());
+            self.single_write(d.clone());
         }
         Ok(())
     }
@@ -71,13 +72,13 @@ impl<T: 'static> RingBufferStorage<T> {
             return Err(RBError::TooLargeWrite);
         }
         for d in data.drain(0..) {
-            self.write_single(d);
+            self.single_write(d);
         }
         Ok(())
     }
 
     /// Write a single data point into the ringbuffer.
-    pub fn write_single(&mut self, data: T) {
+    pub fn single_write(&mut self, data: T) {
         let mut write_index = self.write_index;
         if write_index == self.data.len() {
             self.data.push(data);
@@ -302,7 +303,7 @@ mod tests {
     fn test_write_slice() {
         let mut buffer = RingBufferStorage::<Test>::new(10);
         let mut reader_id = buffer.new_reader_id();
-        assert!(buffer.write_slice(&events(2)).is_ok());
+        assert!(buffer.slice_write(&events(2)).is_ok());
         match buffer.read(&mut reader_id) {
             Ok(ReadData::Data(data)) => {
                 assert_eq!(
