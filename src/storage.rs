@@ -52,29 +52,55 @@ impl<T: 'static> RingBufferStorage<T> {
         }
     }
 
-    /// Write a slice of events into the ringbuffer.
+    /// Iterates over all elements of `data`, clones them and pushes them to the buffer.
+    ///
+    /// # Errors
+    ///
+    /// * Returns `RBError::TooLargeWrite` if the slice contains more
+    ///   elements than `max_size()`.
+    ///   In such a case, only the first `max_size` elements get pushed.
+    #[deprecated(since = "0.6.1", note = "replaced by `iter_write`")]
     pub fn slice_write(&mut self, data: &[T]) -> Result<(), RBError>
     where
         T: Clone,
     {
-        if data.len() > self.max_size {
-            return Err(RBError::TooLargeWrite);
-        }
-        for d in data {
-            self.single_write(d.clone());
-        }
-        Ok(())
+        self.iter_write(data.into_iter().cloned())
     }
 
-    /// Write a Vec of data into the ringbuffer.
-    pub fn drain_vec_write(&mut self, data: &mut Vec<T>) -> Result<(), RBError> {
-        if data.len() > self.max_size {
-            return Err(RBError::TooLargeWrite);
-        }
-        for d in data.drain(0..) {
+    /// Iterates over all elements of `iter` and pushes them to the buffer.
+    ///
+    /// # Errors
+    ///
+    /// * Returns `RBError::TooLargeWrite` if the iterator provides more
+    ///   elements than `max_size()`.
+    ///   In such a case, only the first `max_size` elements get pushed.
+    pub fn iter_write<I>(&mut self, iter: I) -> Result<(), RBError>
+    where
+        I: IntoIterator<Item = T>
+    {
+        let mut iter = iter.into_iter().fuse();
+        for d in (&mut iter).take(self.max_size) {
             self.single_write(d);
         }
-        Ok(())
+
+        // If the iterator still contains data,
+        // it was too large.
+        if iter.next().is_none() {
+            Ok(())
+        } else {
+            Err(RBError::TooLargeWrite)
+        }
+    }
+
+    /// Removes all elements from a `Vec` and pushes them to the ringbuffer.
+    ///
+    /// # Errors
+    ///
+    /// * Returns `RBError::TooLargeWrite` if the `Vec` is bigger than `max_size()`.
+    ///   In such a case, only the first `max_size` elements get pushed.
+    ///   Note that the elements get still removed even if they're not all pushed.
+    pub fn drain_vec_write(&mut self, data: &mut Vec<T>) -> Result<(), RBError> {
+        self.iter_write(data.drain(..))
     }
 
     /// Write a single data point into the ringbuffer.
@@ -137,6 +163,11 @@ impl<T: 'static> RingBufferStorage<T> {
                 started: num_written == 0,
             }))
         }
+    }
+
+    /// The number of elements this bufer can store.
+    pub fn max_size(&self) -> usize {
+        self.max_size
     }
 }
 

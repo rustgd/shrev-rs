@@ -43,11 +43,16 @@ where
         Self::with_capacity(DEFAULT_MAX_SIZE)
     }
 
-    /// Create a new EventChannel with the given max size
+    /// Create a new EventChannel with the given max size.
     pub fn with_capacity(size: usize) -> Self {
         Self {
             storage: RingBufferStorage::new(size),
         }
+    }
+
+    /// Returns the maximum number of events that can be stored at once.
+    pub fn max_size(&self) -> usize {
+        self.storage.max_size()
     }
 
     /// Register a reader.
@@ -64,7 +69,7 @@ where
     where
         E: Clone,
     {
-        self.storage.slice_write(events)
+        self.storage.iter_write(events.into_iter().cloned())
     }
 
     /// Drain a vector of events into storage.

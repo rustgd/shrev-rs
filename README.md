@@ -1,9 +1,9 @@
 A pull based event channel, with events stored in a ring buffer,
- meant to be used as a resource in [`specs`](specs).
+meant to be used as a resource in [`specs`].
  
-[specs]: https://github.com/slide-rs/specs
+[`specs`]: https://github.com/slide-rs/specs
 
-Example
+## Example usage
 
 ```rust
 extern crate shrev;
@@ -27,8 +27,8 @@ fn main() {
     // Should be empty, because reader was created after the write
     match channel.read(&mut reader_id) {
        Ok(EventReadData::Data(data)) => assert_eq!(
-           Vec::<TestEvent>::default(),
-           data.cloned().collect::<Vec<_>>()
+           vec![],
+           data.cloned().collect::<Vec<TestEvent>>()
        ),
        _ => panic!(),
     }
