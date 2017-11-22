@@ -32,6 +32,7 @@ impl ReaderId {
 }
 
 /// Ring buffer, holding data of type `T`
+#[derive(Debug)]
 pub struct RingBufferStorage<T> {
     pub(crate) data: Vec<T>,
     write_index: usize,
@@ -141,6 +142,7 @@ impl<T: 'static> RingBufferStorage<T> {
 }
 
 /// Wrapper for read data. Needed because of overflow situations.
+#[derive(Debug)]
 pub enum ReadData<'a, T: 'a> {
     /// Normal read scenario, only contains an `Iterator` over the data.
     Data(StorageIterator<'a, T>),
@@ -151,6 +153,7 @@ pub enum ReadData<'a, T: 'a> {
 }
 
 /// Iterator over a slice of data in `RingBufferStorage`.
+#[derive(Debug)]
 pub struct StorageIterator<'a, T: 'a> {
     storage: &'a RingBufferStorage<T>,
     current: usize,
