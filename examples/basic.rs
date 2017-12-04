@@ -18,7 +18,7 @@ fn main() {
 
     // Should be empty, because reader was created after the write
     match channel.read(&mut reader_id) {
-        Ok(EventReadData::Data(data)) => assert_eq!(
+        EventReadData::Data(data) => assert_eq!(
             Vec::<TestEvent>::default(),
             data.cloned().collect::<Vec<_>>()
         ),
@@ -30,11 +30,11 @@ fn main() {
         .expect("");
 
     // Should have data, as a second write was done
-    match channel.lossy_read(&mut reader_id) {
-        Ok(data) => assert_eq!(
-            vec![TestEvent { data: 8 }, TestEvent { data: 9 }],
-            data.cloned().collect::<Vec<_>>()
-        ),
-        _ => panic!(),
-    }
+    assert_eq!(
+        vec![TestEvent { data: 8 }, TestEvent { data: 9 }],
+        channel
+            .lossy_read(&mut reader_id)
+            .cloned()
+            .collect::<Vec<_>>()
+    );
 }

@@ -1,6 +1,6 @@
 //! Ring buffer implementation, that does immutable reads.
 
-use std::any::TypeId;
+use std::marker;
 use std::ops::{Index, IndexMut};
 
 /// Ringbuffer errors
@@ -14,19 +14,19 @@ pub enum RBError {
 
 /// The reader id is used by readers to tell the storage where the last read ended.
 #[derive(Hash, PartialEq, Clone, Debug)]
-pub struct ReaderId {
-    t: TypeId,
+pub struct ReaderId<T> {
     read_index: usize,
     written: usize,
+    m: marker::PhantomData<T>,
 }
 
-impl ReaderId {
+impl<T> ReaderId<T> {
     /// Create a new reader id
-    pub fn new(t: TypeId, reader_index: usize, written: usize) -> ReaderId {
+    pub fn new(reader_index: usize, written: usize) -> ReaderId<T> {
         ReaderId {
-            t,
             read_index: reader_index,
             written,
+            m: marker::PhantomData,
         }
     }
 }
@@ -53,21 +53,6 @@ impl<T: 'static> RingBufferStorage<T> {
         }
     }
 
-    /// Iterates over all elements of `data`, clones them and pushes them to the buffer.
-    ///
-    /// # Errors
-    ///
-    /// * Returns `RBError::TooLargeWrite` if the slice contains more
-    ///   elements than `max_size()`.
-    ///   In such a case, only the first `max_size` elements get pushed.
-    #[deprecated(since = "0.6.1", note = "replaced by `iter_write`")]
-    pub fn slice_write(&mut self, data: &[T]) -> Result<(), RBError>
-    where
-        T: Clone,
-    {
-        self.iter_write(data.into_iter().cloned())
-    }
-
     /// Iterates over all elements of `iter` and pushes them to the buffer.
     ///
     /// # Errors
@@ -77,7 +62,7 @@ impl<T: 'static> RingBufferStorage<T> {
     ///   In such a case, only the first `max_size` elements get pushed.
     pub fn iter_write<I>(&mut self, iter: I) -> Result<(), RBError>
     where
-        I: IntoIterator<Item = T>
+        I: IntoIterator<Item = T>,
     {
         let mut iter = iter.into_iter().fuse();
         for d in (&mut iter).take(self.max_size) {
@@ -124,17 +109,13 @@ impl<T: 'static> RingBufferStorage<T> {
     }
 
     /// Create a new reader id for this ringbuffer.
-    pub fn new_reader_id(&self) -> ReaderId {
-        let reader_id = ReaderId::new(TypeId::of::<T>(), self.write_index, self.written);
-        reader_id
+    pub fn new_reader_id(&self) -> ReaderId<T> {
+        ReaderId::new(self.write_index, self.written)
     }
 
     /// Read data from the ringbuffer, starting where the last read ended, and up to where the last
     /// data was written.
-    pub fn read(&self, reader_id: &mut ReaderId) -> Result<ReadData<T>, RBError> {
-        if reader_id.t != TypeId::of::<T>() {
-            return Err(RBError::InvalidReader);
-        }
+    pub fn read(&self, reader_id: &mut ReaderId<T>) -> ReadData<T> {
         let num_written = if self.written < reader_id.written {
             self.written + (self.reset_written - reader_id.written)
         } else {
@@ -146,7 +127,7 @@ impl<T: 'static> RingBufferStorage<T> {
         reader_id.written = self.written;
 
         if num_written > self.max_size {
-            Ok(ReadData::Overflow(
+            ReadData::Overflow(
                 StorageIterator {
                     storage: &self,
                     current: self.write_index,
@@ -154,15 +135,15 @@ impl<T: 'static> RingBufferStorage<T> {
                     started: false,
                 },
                 num_written - self.max_size,
-            ))
+            )
         } else {
-            Ok(ReadData::Data(StorageIterator {
+            ReadData::Data(StorageIterator {
                 storage: &self,
                 current: read_index,
                 end: self.write_index,
                 // handle corner case no data to read
                 started: num_written == 0,
-            }))
+            })
         }
     }
 
@@ -229,7 +210,6 @@ impl<T> IndexMut<usize> for RingBufferStorage<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::any::TypeId;
 
     #[derive(Debug, Clone, PartialEq)]
     struct Test {
@@ -260,23 +240,11 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_reader() {
-        let buffer = RingBufferStorage::<Test>::new(10);
-        let mut reader_id = ReaderId::new(TypeId::of::<Test2>(), 0, 0);
-        let r = buffer.read(&mut reader_id);
-        assert!(r.is_err());
-        match r {
-            Err(RBError::InvalidReader) => (),
-            _ => panic!(),
-        }
-    }
-
-    #[test]
     fn test_empty_read() {
         let buffer = RingBufferStorage::<Test>::new(10);
         let mut reader_id = buffer.new_reader_id();
         match buffer.read(&mut reader_id) {
-            Ok(ReadData::Data(data)) => {
+            ReadData::Data(data) => {
                 assert_eq!(Vec::<Test>::default(), data.cloned().collect::<Vec<_>>())
             }
             _ => panic!(),
@@ -289,7 +257,7 @@ mod tests {
         assert!(buffer.drain_vec_write(&mut events(2)).is_ok());
         let mut reader_id = buffer.new_reader_id();
         match buffer.read(&mut reader_id) {
-            Ok(ReadData::Data(data)) => {
+            ReadData::Data(data) => {
                 assert_eq!(Vec::<Test>::default(), data.cloned().collect::<Vec<_>>())
             }
             _ => panic!(),
@@ -302,7 +270,7 @@ mod tests {
         let mut reader_id = buffer.new_reader_id();
         assert!(buffer.drain_vec_write(&mut events(2)).is_ok());
         match buffer.read(&mut reader_id) {
-            Ok(ReadData::Data(data)) => assert_eq!(
+            ReadData::Data(data) => assert_eq!(
                 vec![Test { id: 0 }, Test { id: 1 }],
                 data.cloned().collect::<Vec<_>>()
             ),
@@ -318,7 +286,7 @@ mod tests {
         assert!(buffer.drain_vec_write(&mut events(2)).is_ok());
         let r = buffer.read(&mut reader_id);
         match r {
-            Ok(ReadData::Overflow(lost_data, lost_size)) => {
+            ReadData::Overflow(lost_data, lost_size) => {
                 // we wrote 4 data points into a buffer of size 3, that means we've lost 1 data
                 // point
                 assert_eq!(1, lost_size);
@@ -337,9 +305,9 @@ mod tests {
     fn test_write_slice() {
         let mut buffer = RingBufferStorage::<Test>::new(10);
         let mut reader_id = buffer.new_reader_id();
-        assert!(buffer.slice_write(&events(2)).is_ok());
+        assert!(buffer.iter_write(events(2)).is_ok());
         match buffer.read(&mut reader_id) {
-            Ok(ReadData::Data(data)) => {
+            ReadData::Data(data) => {
                 assert_eq!(
                     vec![Test { id: 0 }, Test { id: 1 }],
                     data.cloned().collect::<Vec<_>>()
