@@ -3,18 +3,20 @@
 //!
 //! See examples directory for examples.
 
-#![deny(missing_docs)]
+//#![deny(missing_docs)]
 
 pub use storage::RBError as EventError;
 pub use storage::ReadData as EventReadData;
 pub use storage::ReaderId;
 pub use storage::StorageIterator as EventIterator;
+pub use resizable::ResizableBuffer;
 
 use std::any::TypeId;
 
 use storage::RingBufferStorage;
 
 mod storage;
+mod resizable;
 
 /// Marker trait for data to use with the EventChannel.
 ///

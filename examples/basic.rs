@@ -1,14 +1,20 @@
 extern crate shrev;
 
-use shrev::{EventChannel, EventReadData};
+use shrev::{EventChannel, EventReadData, ResizableBuffer};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct TestEvent {
     data: u32,
 }
 
+impl ::std::fmt::Debug for TestEvent {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        write!(f, "{:?}", self.data)
+    }
+}
+
 fn main() {
-    let mut channel = EventChannel::new();
+    /*let mut channel = EventChannel::new();
 
     channel
         .drain_vec_write(&mut vec![TestEvent { data: 1 }, TestEvent { data: 2 }])
@@ -36,5 +42,23 @@ fn main() {
             data.cloned().collect::<Vec<_>>()
         ),
         _ => panic!(),
-    }
+    }*/
+
+    let mut counter = (0..10000);
+
+    let mut resize = ResizableBuffer::new();
+    let mut reader = resize.reader();
+    resize.push(TestEvent { data: counter.next().unwrap() });
+    resize.push(TestEvent { data: counter.next().unwrap() });
+    resize.push(TestEvent { data: counter.next().unwrap() });
+    resize.push(TestEvent { data: counter.next().unwrap() });
+    println!("{:#?}", resize);
+    println!("{:#?}", reader);
+    resize.read(&mut reader);
+    println!("{:#?}", resize);
+    println!("{:#?}", reader);
+    resize.push(TestEvent { data: counter.next().unwrap() });
+    resize.push(TestEvent { data: counter.next().unwrap() });
+    resize.push(TestEvent { data: counter.next().unwrap() });
+    println!("{:#?}", resize);
 }
