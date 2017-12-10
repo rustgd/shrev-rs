@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::marker::PhantomData;
 use std::collections::HashMap;
+use std::cell::UnsafeCell;
 
 const DEFAULT_CAP: usize = 5;
 
@@ -19,17 +20,17 @@ pub struct ResizableBuffer<T> {
     len: usize,
 
     write_index: usize,
-    read_index: Mutex<usize>,
+    read_index: usize,
 
-    readers: Vec<(usize, Mutex<usize>)>,
+    readers: HashMap<usize, UnsafeCell<usize>>,
     current_reader: usize,
 }
 
 #[derive(Debug)]
 pub struct ReaderId<T> {
-    // reader id, read
+    // This id should be unique, you cannot have two readers
+    // with the same id.
     id: usize,
-    read: Arc<AtomicUsize>,
     phantom: PhantomData<T>,
 }
 
@@ -45,28 +46,28 @@ impl<T> ResizableBuffer<T> {
         let len = buffer.len();
         ResizableBuffer {
             list: buffer,
+
             ring_cap: len,
-            cap: len,
             ring_len: 0,
+
+            cap: len,
             len: 0,
 
             write_index: 0,
             read_index: 0,
 
-            readers: Vec::new(),
+            readers: HashMap::new(),
             current_reader: 0,
         }
     }
 
     pub fn reader(&mut self) -> ReaderId<T> {
-        let refcount = Arc::new(AtomicUsize::new(self.write_index));
         let reader = ReaderId {
             id: self.current_reader,
-            read: refcount.clone(),
             phantom: PhantomData,
         };
 
-        self.readers.push((self.current_reader, refcount));
+        self.readers.insert(self.current_reader, UnsafeCell::new(self.write_index));
         self.current_reader += 1;
         reader
     }
@@ -123,19 +124,13 @@ impl<T> ResizableBuffer<T> {
     }
 
     pub fn read(&self, reader: &mut ReaderId<T>) -> ReadData<T> {
-        let read_index = reader.read.load(Ordering::SeqCst);
-        let current_read_index = self.read_index.load(Ordering::SeqCst);
-
-        if current_read_index == read_index {
-            read_index.store(self.lowest());
-        }
-
         let data = ReadData {
             buffer: self,
-            current: read_index,
+            current: self.read_index,
         };
 
-        reader.read.store(self.write_index, Ordering::SeqCst);
+        // This is safe as long as the reader id unique.
+        unsafe { *self.readers.get(&reader.id).unwrap().get() = self.write_index; }
         data
     }
 
@@ -167,15 +162,34 @@ impl<T> ResizableBuffer<T> {
     }
     */
 
-    pub fn lowest_index(&self) -> usize {
+    /// Gets the lowest reader index.
+    /// 
+    /// This takes a mutable ring buffer since otherwise these could
+    /// be getting modified while we read.
+    fn lowest_index(&mut self) -> usize {
         let mut lowest = self.len;
-        for ref refcount in &self.readers {
-            let index = refcount.1.load(Ordering::SeqCst);
+        for index in self.readers.values() {
+            let index = unsafe { *index.get() };
             if index < lowest {
                 lowest = index
             }
         }
         lowest
+    }
+
+    pub fn print_readers(&mut self) {
+        println!("readers: {{");
+        for (&key, ref value) in &self.readers {
+            println!("  {:?}: {:?}", key, unsafe { *value.get() });
+        }
+        println!("}}");
+    }
+
+    pub fn print(&mut self)
+        where T: ::std::fmt::Debug,
+    {
+        println!("Buffer: {:#?}", *self);
+        self.print_readers();
     }
 }
 

@@ -44,21 +44,22 @@ fn main() {
         _ => panic!(),
     }*/
 
-    let mut counter = (0..10000);
+    let mut counter = 0..10000;
 
     let mut resize = ResizableBuffer::new();
-    let mut reader = resize.reader();
+    let mut r1 = resize.reader();
+    let mut r2 = resize.reader();
+    let mut r3 = resize.reader();
     resize.push(TestEvent { data: counter.next().unwrap() });
     resize.push(TestEvent { data: counter.next().unwrap() });
     resize.push(TestEvent { data: counter.next().unwrap() });
     resize.push(TestEvent { data: counter.next().unwrap() });
-    println!("{:#?}", resize);
-    println!("{:#?}", reader);
-    resize.read(&mut reader);
-    println!("{:#?}", resize);
-    println!("{:#?}", reader);
+    resize.print();
+    resize.read(&mut r1);
+    resize.read(&mut r2);
+    resize.print();
     resize.push(TestEvent { data: counter.next().unwrap() });
     resize.push(TestEvent { data: counter.next().unwrap() });
     resize.push(TestEvent { data: counter.next().unwrap() });
-    println!("{:#?}", resize);
+    resize.print();
 }
