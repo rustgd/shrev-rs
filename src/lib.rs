@@ -5,12 +5,8 @@
 
 #![deny(missing_docs)]
 
-pub use storage::RBError as EventError;
-pub use storage::ReadData as EventReadData;
 pub use storage::ReaderId;
 pub use storage::StorageIterator as EventIterator;
-
-use std::any::TypeId;
 
 use storage::RingBufferStorage;
 
@@ -50,31 +46,26 @@ where
         }
     }
 
-    /// Returns the maximum number of events that can be stored at once.
-    pub fn max_size(&self) -> usize {
-        self.storage.max_size()
-    }
-
     /// Register a reader.
     ///
     /// To be able to read events, a reader id is required. This is because otherwise the channel
     /// wouldn't know where in the ringbuffer the reader has read to earlier. This information is
     /// stored in the reader id.
-    pub fn register_reader(&self) -> ReaderId<E> {
+    pub fn register_reader(&mut self) -> ReaderId<E> {
         self.storage.new_reader_id()
     }
 
     /// Write a slice of events into storage
-    pub fn slice_write(&mut self, events: &[E]) -> Result<(), EventError>
+    pub fn slice_write(&mut self, events: &[E])
     where
         E: Clone,
     {
-        self.storage.iter_write(events.into_iter().cloned())
+        self.storage.iter_write(events.into_iter().cloned());
     }
 
     /// Drain a vector of events into storage.
-    pub fn drain_vec_write(&mut self, events: &mut Vec<E>) -> Result<(), EventError> {
-        self.storage.drain_vec_write(events)
+    pub fn drain_vec_write(&mut self, events: &mut Vec<E>) {
+        self.storage.drain_vec_write(events);
     }
 
     /// Write a single event into storage.
@@ -83,24 +74,8 @@ where
     }
 
     /// Read any events that have been written to storage since the readers last read.
-    pub fn read(&self, reader_id: &mut ReaderId<E>) -> EventReadData<E> {
+    pub fn read(&self, reader_id: &mut ReaderId<E>) -> EventIterator<E> {
         self.storage.read(reader_id)
-    }
-
-    /// Read events with loss if there is `Overflow`. Will only print an error message, and return
-    /// what could be salvaged.
-    pub fn lossy_read(&self, reader_id: &mut ReaderId<E>) -> EventIterator<E> {
-        match self.read(reader_id) {
-            EventReadData::Data(data) => data,
-            EventReadData::Overflow(data, overflow) => {
-                eprintln!(
-                    "EventChannel/{:?} overflowed, {} events missed.",
-                    TypeId::of::<E>(),
-                    overflow
-                );
-                data
-            }
-        }
     }
 }
 
@@ -115,13 +90,6 @@ mod tests {
     }
 
     #[test]
-    fn test_register_reader() {
-        let channel = EventChannel::<Test>::with_capacity(14);
-        let reader_id = channel.register_reader();
-        assert_eq!(ReaderId::new(0, 0), reader_id);
-    }
-
-    #[test]
     fn test_read_write() {
         let mut channel = EventChannel::with_capacity(14);
 
@@ -129,40 +97,17 @@ mod tests {
         let mut reader_id_extra = channel.register_reader();
 
         channel.single_write(Test { id: 1 });
-        match channel.read(&mut reader_id) {
-            EventReadData::Data(data) => {
-                assert_eq!(vec![Test { id: 1 }], data.cloned().collect::<Vec<_>>())
-            }
-            _ => panic!(),
-        }
-
+        assert_eq!(vec![Test { id: 1 }], channel.read(&mut reader_id).cloned().collect::<Vec<_>>());
         channel.single_write(Test { id: 2 });
-        match channel.read(&mut reader_id) {
-            EventReadData::Data(data) => {
-                assert_eq!(vec![Test { id: 2 }], data.cloned().collect::<Vec<_>>())
-            }
-            _ => panic!(),
-        }
-        match channel.read(&mut reader_id_extra) {
-            EventReadData::Data(data) => assert_eq!(
-                vec![Test { id: 1 }, Test { id: 2 }],
-                data.cloned().collect::<Vec<_>>()
-            ),
-            _ => panic!(),
-        }
+        assert_eq!(vec![Test { id: 2 }], channel.read(&mut reader_id).cloned().collect::<Vec<_>>());
+
+        assert_eq!(
+            vec![Test { id: 1 }, Test { id: 2 }],
+            channel.read(&mut reader_id_extra).cloned().collect::<Vec<_>>()
+        );
 
         channel.single_write(Test { id: 3 });
-        match channel.read(&mut reader_id) {
-            EventReadData::Data(data) => {
-                assert_eq!(vec![Test { id: 3 }], data.cloned().collect::<Vec<_>>())
-            }
-            _ => panic!(),
-        }
-        match channel.read(&mut reader_id_extra) {
-            EventReadData::Data(data) => {
-                assert_eq!(vec![Test { id: 3 }], data.cloned().collect::<Vec<_>>())
-            }
-            _ => panic!(),
-        }
+        assert_eq!(vec![Test { id: 3 }], channel.read(&mut reader_id).cloned().collect::<Vec<_>>());
+        assert_eq!(vec![Test { id: 3 }], channel.read(&mut reader_id_extra).cloned().collect::<Vec<_>>());
     }
 }
