@@ -56,7 +56,7 @@ where
     }
 
     /// Write a slice of events into storage
-    #[deprecated]
+    #[deprecated(note="please use `iter_write` instead")]
     pub fn slice_write(&mut self, events: &[E])
     where
         E: Clone,
