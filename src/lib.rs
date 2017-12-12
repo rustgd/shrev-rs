@@ -39,7 +39,7 @@ where
         Self::with_capacity(DEFAULT_MAX_SIZE)
     }
 
-    /// Create a new EventChannel with the given max size.
+    /// Create a new EventChannel with the given starting capacity.
     pub fn with_capacity(size: usize) -> Self {
         Self {
             storage: RingBufferStorage::new(size),
@@ -56,11 +56,20 @@ where
     }
 
     /// Write a slice of events into storage
+    #[deprecated]
     pub fn slice_write(&mut self, events: &[E])
     where
         E: Clone,
     {
         self.storage.iter_write(events.into_iter().cloned());
+    }
+
+    /// Write an iterator of events into storage
+    pub fn iter_write<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = E>,
+    {
+        self.storage.iter_write(iter);
     }
 
     /// Drain a vector of events into storage.
@@ -97,17 +106,77 @@ mod tests {
         let mut reader_id_extra = channel.register_reader();
 
         channel.single_write(Test { id: 1 });
-        assert_eq!(vec![Test { id: 1 }], channel.read(&mut reader_id).cloned().collect::<Vec<_>>());
+        assert_eq!(
+            vec![Test { id: 1 }],
+            channel.read(&mut reader_id).cloned().collect::<Vec<_>>()
+        );
         channel.single_write(Test { id: 2 });
-        assert_eq!(vec![Test { id: 2 }], channel.read(&mut reader_id).cloned().collect::<Vec<_>>());
+        assert_eq!(
+            vec![Test { id: 2 }],
+            channel.read(&mut reader_id).cloned().collect::<Vec<_>>()
+        );
 
         assert_eq!(
             vec![Test { id: 1 }, Test { id: 2 }],
-            channel.read(&mut reader_id_extra).cloned().collect::<Vec<_>>()
+            channel
+                .read(&mut reader_id_extra)
+                .cloned()
+                .collect::<Vec<_>>()
         );
 
         channel.single_write(Test { id: 3 });
-        assert_eq!(vec![Test { id: 3 }], channel.read(&mut reader_id).cloned().collect::<Vec<_>>());
-        assert_eq!(vec![Test { id: 3 }], channel.read(&mut reader_id_extra).cloned().collect::<Vec<_>>());
+        assert_eq!(
+            vec![Test { id: 3 }],
+            channel.read(&mut reader_id).cloned().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![Test { id: 3 }],
+            channel
+                .read(&mut reader_id_extra)
+                .cloned()
+                .collect::<Vec<_>>()
+        );
+    }
+
+    // There was previously a case where the tests worked but the example didn't, so the example
+    // was added as a test case.
+    #[test]
+    fn test_example() {
+        let mut channel = EventChannel::new();
+
+        channel.drain_vec_write(&mut vec![TestEvent { data: 1 }, TestEvent { data: 2 }]);
+
+        let mut reader_id = channel.register_reader();
+
+        // Should be empty, because reader was created after the write
+        assert_eq!(
+            Vec::<TestEvent>::default(),
+            channel.read(&mut reader_id).cloned().collect::<Vec<_>>()
+        );
+
+        // Should have data, as a second write was done
+        channel.single_write(TestEvent { data: 5 });
+
+        assert_eq!(
+            vec![TestEvent { data: 5 }],
+            channel.read(&mut reader_id).cloned().collect::<Vec<_>>()
+        );
+
+        // We can also just send in an iterator.
+        channel.iter_write(
+            [TestEvent { data: 8 }, TestEvent { data: 9 }]
+                .iter()
+                .cloned(),
+        );
+
+        assert_eq!(
+            vec![TestEvent { data: 8 }, TestEvent { data: 9 }],
+            channel.read(&mut reader_id).cloned().collect::<Vec<_>>()
+        );
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct TestEvent {
+        data: u32,
     }
 }
