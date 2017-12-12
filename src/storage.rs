@@ -57,6 +57,8 @@ pub struct RingBufferStorage<T> {
     reset_written: usize,
 }
 
+unsafe impl<T> Sync for RingBufferStorage<T> where T: Sync {}
+
 impl<T: 'static> RingBufferStorage<T> {
     /// Create a new ring buffer with the given max size.
     pub fn new(size: usize) -> Self {
