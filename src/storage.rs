@@ -1,5 +1,6 @@
 //! Ring buffer implementation, that does immutable reads.
 
+use std::cell::UnsafeCell;
 use std::marker;
 use std::ops::{Index, IndexMut};
 use std::sync::Arc;
@@ -50,7 +51,7 @@ static RING_BUFFER_ID: AtomicUsize = ATOMIC_USIZE_INIT;
 pub struct RingBufferStorage<T> {
     pub(crate) data: Vec<T>,
     buffer_id: usize,
-    reader_internal: Vec<InternalReaderId>,
+    reader_internal: Vec<UnsafeCell<InternalReaderId>>,
     write_index: usize,
     written: usize,
     reset_written: usize,
@@ -89,7 +90,8 @@ impl<T: 'static> RingBufferStorage<T> {
         // If there are no living readers do nothing.
         if self.reader_internal
             .iter()
-            .all(|ref internal| !internal.alive.load(Ordering::Relaxed))
+            .map(|ref internal| unsafe {&*internal.get()})
+            .all(|internal| !internal.alive.load(Ordering::Relaxed))
         {
             return;
         }
@@ -99,7 +101,8 @@ impl<T: 'static> RingBufferStorage<T> {
         }
         let need_growth = self.reader_internal
             .iter()
-            .filter_map(|ref internal| {
+            .map(|ref internal| unsafe {&*internal.get()})
+            .filter_map(|internal| {
                 if internal.alive.load(Ordering::Relaxed) {
                     Some(&internal.written)
                 } else {
@@ -120,8 +123,10 @@ impl<T: 'static> RingBufferStorage<T> {
             // range we're also going to push any readers that are ahead of us in the buffer
             // forward one as well.
             for i in 0..self.reader_internal.len() {
-                if self.reader_internal[i].index > self.write_index {
-                    self.reader_internal[i].index += 1;
+                unsafe {
+                    if (*self.reader_internal[i].get()).index > self.write_index {
+                        (*self.reader_internal[i].get()).index += 1;
+                    }
                 }
             }
         } else {
@@ -130,8 +135,10 @@ impl<T: 'static> RingBufferStorage<T> {
                 // If we're looping the write index then the meaning of any read indices at the end
                 // has changed, so we need to loop them too.
                 for i in 0..self.reader_internal.len() {
-                    if self.reader_internal[i].index == self.write_index {
-                        self.reader_internal[i].index = 0;
+                    unsafe {
+                        if (*self.reader_internal[i].get()).index == self.write_index {
+                            (*self.reader_internal[i].get()).index = 0;
+                        }
                     }
                 }
                 // Loop the write index
@@ -148,20 +155,19 @@ impl<T: 'static> RingBufferStorage<T> {
         // Attempt to re-use positions from dropped readers.
         let new_id = self.reader_internal
             .iter()
+            .map(|ref internal| unsafe {&*internal.get()})
             .position(|internal| !internal.alive.load(Ordering::Relaxed));
         match new_id {
-            Some(new_id) => {
-                self.reader_internal[new_id] = InternalReaderId {
-                    written: self.written,
-                    index: self.write_index,
-                    alive: alive.clone(),
-                }
-            }
-            None => self.reader_internal.push(InternalReaderId {
+            Some(new_id) => self.reader_internal[new_id] = UnsafeCell::new(InternalReaderId {
                 written: self.written,
                 index: self.write_index,
                 alive: alive.clone(),
             }),
+            None => self.reader_internal.push(UnsafeCell::new(InternalReaderId {
+                written: self.written,
+                index: self.write_index,
+                alive: alive.clone(),
+            })),
         }
         ReaderId::new(
             new_id.unwrap_or(self.reader_internal.len() - 1),
@@ -177,7 +183,7 @@ impl<T: 'static> RingBufferStorage<T> {
             reader_id.buffer_id == self.buffer_id,
             "ReaderID used with an event buffer it's not registered to.  Not permitted!"
         );
-        let written = self.reader_internal[reader_id.reader_id].written;
+        let written = unsafe { (*self.reader_internal[reader_id.reader_id].get()).written };
         let num_written = if self.written < written {
             self.written + (self.reset_written - written)
         } else {
@@ -186,19 +192,18 @@ impl<T: 'static> RingBufferStorage<T> {
 
         // read index is sometimes kept at maximum in case the buffer grows, but if the buffer
         // hasn't grown then we need to interpret the maximum index as 0.
-        let read_index = if self.reader_internal[reader_id.reader_id].index == self.data.len() {
+        let mut read_index = unsafe { (*self.reader_internal[reader_id.reader_id].get()).index };
+        read_index = if read_index == self.data.len() {
             0
         } else {
-            self.reader_internal[reader_id.reader_id].index
+            read_index
         };
         // Update the reader indice inside the storage.  This is safe because the only time this
         // value can be updated is when there is both a mutable reference to the reader ID
         // and an immutable reference to the storage.  We also guaranteed above that this reader id
         // was created by this storage.
         unsafe {
-            let pointer: &InternalReaderId = &self.reader_internal[reader_id.reader_id];
-            let pointer: *const InternalReaderId = pointer as *const InternalReaderId;
-            let pointer: *mut InternalReaderId = pointer as *mut InternalReaderId;
+            let pointer: *mut InternalReaderId = self.reader_internal[reader_id.reader_id].get();
             (*pointer).written = self.written;
             (*pointer).index = self.write_index;
         }
