@@ -179,7 +179,7 @@ impl<T: 'static> RingBufferStorage<T> {
     /// Read data from the ringbuffer, starting where the last read ended, and up to where the last
     /// data was written.
     pub fn read(&self, reader_id: &mut ReaderId<T>) -> StorageIterator<T> {
-        debug_assert!(
+        assert!(
             reader_id.buffer_id == self.buffer_id,
             "ReaderID used with an event buffer it's not registered to.  Not permitted!"
         );
