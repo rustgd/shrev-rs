@@ -110,14 +110,14 @@ impl<T: 'static> RingBufferStorage<T> {
             let (longest_reader, num_written) = self.reader_internal
                 .iter()
                 .map(|ref internal| unsafe {&*internal.get()})
-                .filter_map(|internal| {
+                .enumerate()
+                .filter_map(|(i, internal)| {
                     if internal.alive.load(Ordering::Relaxed) {
-                        Some(&internal.written)
+                        Some((i, &internal.written))
                     } else {
                         None
                     }
                 })
-                .enumerate()
                 .fold((0, 0), |(index, max_written), (i, &written)| {
                     let num_written = if self.written < written {
                         self.written + (self.reset_written - written)
