@@ -366,6 +366,21 @@ mod tests {
         );
     }
 
+    /// If you're getting a compilation error here this test has failed!
+    #[test]
+    fn test_send_sync() {
+        trait SendSync: Send + Sync {
+            fn is_send_sync() -> bool;
+        }
+
+        impl<T> SendSync for T where T: Send + Sync {
+            fn is_send_sync() -> bool { true }
+        }
+
+        assert!(RingBufferStorage::<Test>::is_send_sync());
+        assert!(ReaderId::<Test>::is_send_sync());
+    }
+
     #[test]
     fn test_reader_reuse() {
         let mut buffer = RingBufferStorage::<Test>::new(3);
