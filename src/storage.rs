@@ -55,6 +55,9 @@ pub struct RingBufferStorage<T> {
     write_index: usize,
     written: usize,
     reset_written: usize,
+    /// Used for caching the current longest reader so we only have to check that reader for
+    /// determining if growth is necessary.
+    current_longest_reader: usize,
 }
 
 unsafe impl<T> Sync for RingBufferStorage<T> where T: Sync {}
@@ -69,6 +72,7 @@ impl<T: 'static> RingBufferStorage<T> {
             write_index: 0,
             written: 0,
             reset_written: size * 1000,
+            current_longest_reader: 0,
         }
     }
 
@@ -87,39 +91,58 @@ impl<T: 'static> RingBufferStorage<T> {
         self.iter_write(data.drain(..));
     }
 
+    fn needs_growth(&mut self) -> bool {
+        let mut cached_num_written = 0;
+        let cache_valid = if self.reader_internal.len() > self.current_longest_reader {
+            let cached_reader = unsafe { &*self.reader_internal[self.current_longest_reader].get() };
+            cached_num_written = if self.written < cached_reader.written {
+                self.written + (self.reset_written - cached_reader.written)
+            } else {
+                self.written - cached_reader.written
+            };
+            cached_reader.alive.load(Ordering::Relaxed) && cached_num_written > 1
+        } else {
+            false
+        };
+        if cache_valid {
+            cached_num_written > self.data.len()
+        } else {
+            let (longest_reader, num_written) = self.reader_internal
+                .iter()
+                .map(|ref internal| unsafe {&*internal.get()})
+                .filter_map(|internal| {
+                    if internal.alive.load(Ordering::Relaxed) {
+                        Some(&internal.written)
+                    } else {
+                        None
+                    }
+                })
+                .enumerate()
+                .fold((0, 0), |(index, max_written), (i, &written)| {
+                    let num_written = if self.written < written {
+                        self.written + (self.reset_written - written)
+                    } else {
+                        self.written - written
+                    };
+                    if num_written > max_written {
+                        (i, num_written)
+                    } else {
+                        (index, max_written)
+                    }
+                });
+            self.current_longest_reader = longest_reader;
+            num_written > self.data.len()
+        }
+    }
+
     /// Write a single data point into the ringbuffer.
     pub fn single_write(&mut self, data: T) {
-        // If there are no living readers do nothing.
-        if self.reader_internal
-            .iter()
-            .map(|ref internal| unsafe {&*internal.get()})
-            .all(|internal| !internal.alive.load(Ordering::Relaxed))
-        {
-            return;
-        }
         self.written += 1;
         if self.written > self.reset_written {
             self.written = 0;
         }
-        let need_growth = self.reader_internal
-            .iter()
-            .map(|ref internal| unsafe {&*internal.get()})
-            .filter_map(|internal| {
-                if internal.alive.load(Ordering::Relaxed) {
-                    Some(&internal.written)
-                } else {
-                    None
-                }
-            })
-            .any(|&written| {
-                let num_written = if self.written < written {
-                    self.written + (self.reset_written - written)
-                } else {
-                    self.written - written
-                };
-                num_written > self.data.len()
-            });
-        if need_growth || self.data.len() == 0 {
+        let need_growth = self.needs_growth();
+        if need_growth {
             self.data.insert(self.write_index, data);
             // In order to avoid pushing events that have already been read back into a readable
             // range we're also going to push any readers that are ahead of us in the buffer
@@ -131,9 +154,10 @@ impl<T: 'static> RingBufferStorage<T> {
                     }
                 }
             }
-        } else {
+            self.write_index += 1;
+        } else if self.data.len() != 0 {
             // Check if we need to loop the write index.
-            if self.write_index >= self.data.len() {
+            if self.write_index == self.data.len() {
                 // If we're looping the write index then the meaning of any read indices at the end
                 // has changed, so we need to loop them too.
                 for i in 0..self.reader_internal.len() {
@@ -147,29 +171,34 @@ impl<T: 'static> RingBufferStorage<T> {
                 self.write_index = 0;
             }
             self.data[self.write_index] = data;
+            self.write_index += 1;
         }
-        self.write_index += 1;
     }
 
     /// Create a new reader id for this ringbuffer.
     pub fn new_reader_id(&mut self) -> ReaderId<T> {
-        let alive = Arc::new(AtomicBool::new(true));
+        let alive;
         // Attempt to re-use positions from dropped readers.
         let new_id = self.reader_internal
             .iter()
             .map(|ref internal| unsafe {&*internal.get()})
             .position(|internal| !internal.alive.load(Ordering::Relaxed));
         match new_id {
-            Some(new_id) => self.reader_internal[new_id] = UnsafeCell::new(InternalReaderId {
-                written: self.written,
-                index: self.write_index,
-                alive: alive.clone(),
-            }),
-            None => self.reader_internal.push(UnsafeCell::new(InternalReaderId {
-                written: self.written,
-                index: self.write_index,
-                alive: alive.clone(),
-            })),
+            Some(new_id) => {
+                let reader = unsafe { &mut *self.reader_internal[new_id].get() };
+                reader.written = self.written;
+                reader.index = self.write_index;
+                reader.alive.store(true, Ordering::Relaxed);
+                alive = reader.alive.clone();
+            },
+            None => {
+                alive = Arc::new(AtomicBool::new(true));
+                self.reader_internal.push(UnsafeCell::new(InternalReaderId {
+                    written: self.written,
+                    index: self.write_index,
+                    alive: alive.clone(),
+                }));
+            },
         }
         ReaderId::new(
             new_id.unwrap_or(self.reader_internal.len() - 1),
@@ -335,6 +364,16 @@ mod tests {
             ],
             data.cloned().collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn test_reader_reuse() {
+        let mut buffer = RingBufferStorage::<Test>::new(3);
+        {
+            let _reader_id = buffer.new_reader_id();
+        }
+        let _reader_id = buffer.new_reader_id();
+        assert_eq!(buffer.reader_internal.len(), 1);
     }
 
     #[test]

@@ -23,7 +23,7 @@ where
 {
 }
 
-const DEFAULT_MAX_SIZE: usize = 200;
+const DEFAULT_CAPACITY: usize = 50;
 
 /// Event channel
 pub struct EventChannel<E> {
@@ -36,7 +36,7 @@ where
 {
     /// Create a new EventChannel with a default size of 200
     pub fn new() -> Self {
-        Self::with_capacity(DEFAULT_MAX_SIZE)
+        Self::with_capacity(DEFAULT_CAPACITY)
     }
 
     /// Create a new EventChannel with the given starting capacity.
