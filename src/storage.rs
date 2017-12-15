@@ -223,12 +223,8 @@ impl<T: 'static> RingBufferStorage<T> {
 
         // read index is sometimes kept at maximum in case the buffer grows, but if the buffer
         // hasn't grown then we need to interpret the maximum index as 0.
-        let mut read_index = unsafe { (*self.reader_internal[reader_id.reader_id].get()).index };
-        read_index = if read_index == self.data.len() {
-            0
-        } else {
-            read_index
-        };
+        let read_index = unsafe { (*self.reader_internal[reader_id.reader_id].get()).index };
+
         // Update the reader indice inside the storage.  This is safe because the only time this
         // value can be updated is when there is both a mutable reference to the reader ID
         // and an immutable reference to the storage.  We also guaranteed above that this reader id
@@ -266,6 +262,9 @@ impl<'a, T> Iterator for StorageIterator<'a, T> {
             None
         } else {
             self.started = true;
+            if self.current == self.storage.data.len() && self.end != self.storage.data.len() {
+                self.current = 0;
+            }
             let item = &self.storage[self.current];
             self.current += 1;
             if self.current == self.storage.data.len() && self.end != self.storage.data.len() {
@@ -342,11 +341,15 @@ mod tests {
         let mut buffer = RingBufferStorage::<Test>::new(10);
         let mut reader_id = buffer.new_reader_id();
         buffer.drain_vec_write(&mut events(2));
-        let data = buffer.read(&mut reader_id);
         assert_eq!(
             vec![Test { id: 0 }, Test { id: 1 }],
-            data.cloned().collect::<Vec<_>>()
-        )
+            buffer.read(&mut reader_id).cloned().collect::<Vec<_>>()
+        );
+
+        assert_eq!(
+            Vec::<Test>::new(),
+            buffer.read(&mut reader_id).cloned().collect::<Vec<_>>()
+        );
     }
 
     #[test]
