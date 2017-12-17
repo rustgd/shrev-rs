@@ -1,167 +1,246 @@
 //! Ring buffer implementation, that does immutable reads.
 
+use std::cell::UnsafeCell;
 use std::marker;
 use std::ops::{Index, IndexMut};
-
-/// Ringbuffer errors
-#[derive(Debug, PartialEq)]
-pub enum RBError {
-    /// If a writer tries to write more data than the max size of the ringbuffer, in a single call
-    TooLargeWrite,
-    /// If attempting to use a reader for a different data type than the storage contains.
-    InvalidReader,
-}
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
 
 /// The reader id is used by readers to tell the storage where the last read ended.
-#[derive(Hash, PartialEq, Clone, Debug)]
+#[derive(Debug)]
 pub struct ReaderId<T> {
-    read_index: usize,
-    written: usize,
+    reader_id: usize,
+    buffer_id: usize,
+    alive: Arc<AtomicBool>,
     m: marker::PhantomData<T>,
 }
 
 impl<T> ReaderId<T> {
     /// Create a new reader id
-    pub fn new(reader_index: usize, written: usize) -> ReaderId<T> {
+    pub fn new(reader_id: usize, buffer_id: usize, alive: Arc<AtomicBool>) -> ReaderId<T> {
         ReaderId {
-            read_index: reader_index,
-            written,
+            reader_id,
+            buffer_id,
+            alive,
             m: marker::PhantomData,
         }
     }
 }
 
+impl<T> Drop for ReaderId<T> {
+    fn drop(&mut self) {
+        self.alive.store(false, Ordering::Relaxed);
+    }
+}
+
+#[derive(Debug)]
+struct InternalReaderId {
+    written: usize,
+    index: usize,
+    alive: Arc<AtomicBool>,
+}
+
+/// This static value helps assign unique ids to every storage which are then propagated to
+/// registered reader IDs, preventing reader IDs from being used with the wrong storage.
+/// It's very important to prevent this because otherwise the unsafe code used for reading
+/// could cause memory corruption.
+static RING_BUFFER_ID: AtomicUsize = ATOMIC_USIZE_INIT;
+
 /// Ring buffer, holding data of type `T`
 #[derive(Debug)]
 pub struct RingBufferStorage<T> {
     pub(crate) data: Vec<T>,
+    buffer_id: usize,
+    reader_internal: Vec<UnsafeCell<InternalReaderId>>,
     write_index: usize,
-    max_size: usize,
     written: usize,
     reset_written: usize,
+    /// Used for caching the current longest reader so we only have to check that reader for
+    /// determining if growth is necessary.
+    current_longest_reader: usize,
 }
+
+unsafe impl<T> Sync for RingBufferStorage<T> where T: Sync {}
 
 impl<T: 'static> RingBufferStorage<T> {
     /// Create a new ring buffer with the given max size.
     pub fn new(size: usize) -> Self {
         RingBufferStorage {
             data: Vec::with_capacity(size),
+            buffer_id: RING_BUFFER_ID.fetch_add(1, Ordering::Relaxed),
+            reader_internal: Vec::new(),
             write_index: 0,
-            max_size: size,
             written: 0,
             reset_written: size * 1000,
+            current_longest_reader: 0,
         }
     }
 
     /// Iterates over all elements of `iter` and pushes them to the buffer.
-    ///
-    /// # Errors
-    ///
-    /// * Returns `RBError::TooLargeWrite` if the iterator provides more
-    ///   elements than `max_size()`.
-    ///   In such a case, only the first `max_size` elements get pushed.
-    pub fn iter_write<I>(&mut self, iter: I) -> Result<(), RBError>
+    pub fn iter_write<I>(&mut self, iter: I)
     where
         I: IntoIterator<Item = T>,
     {
-        let mut iter = iter.into_iter().fuse();
-        for d in (&mut iter).take(self.max_size) {
+        for d in iter {
             self.single_write(d);
-        }
-
-        // If the iterator still contains data,
-        // it was too large.
-        if iter.next().is_none() {
-            Ok(())
-        } else {
-            Err(RBError::TooLargeWrite)
         }
     }
 
     /// Removes all elements from a `Vec` and pushes them to the ringbuffer.
-    ///
-    /// # Errors
-    ///
-    /// * Returns `RBError::TooLargeWrite` if the `Vec` is bigger than `max_size()`.
-    ///   In such a case, only the first `max_size` elements get pushed.
-    ///   Note that the elements get still removed even if they're not all pushed.
-    pub fn drain_vec_write(&mut self, data: &mut Vec<T>) -> Result<(), RBError> {
-        self.iter_write(data.drain(..))
+    pub fn drain_vec_write(&mut self, data: &mut Vec<T>) {
+        self.iter_write(data.drain(..));
+    }
+
+    fn needs_growth(&mut self) -> bool {
+        let mut cached_num_written = 0;
+        let cache_valid = if self.reader_internal.len() > self.current_longest_reader {
+            let cached_reader = unsafe { &*self.reader_internal[self.current_longest_reader].get() };
+            cached_num_written = if self.written < cached_reader.written {
+                self.written + (self.reset_written - cached_reader.written)
+            } else {
+                self.written - cached_reader.written
+            };
+            cached_reader.alive.load(Ordering::Relaxed) && cached_num_written > 1
+        } else {
+            false
+        };
+        if cache_valid {
+            cached_num_written > self.data.len()
+        } else {
+            let (longest_reader, num_written) = self.reader_internal
+                .iter()
+                .map(|ref internal| unsafe {&*internal.get()})
+                .enumerate()
+                .filter_map(|(i, internal)| {
+                    if internal.alive.load(Ordering::Relaxed) {
+                        Some((i, &internal.written))
+                    } else {
+                        None
+                    }
+                })
+                .fold((0, 0), |(index, max_written), (i, &written)| {
+                    let num_written = if self.written < written {
+                        self.written + (self.reset_written - written)
+                    } else {
+                        self.written - written
+                    };
+                    if num_written > max_written {
+                        (i, num_written)
+                    } else {
+                        (index, max_written)
+                    }
+                });
+            self.current_longest_reader = longest_reader;
+            num_written > self.data.len()
+        }
     }
 
     /// Write a single data point into the ringbuffer.
     pub fn single_write(&mut self, data: T) {
-        let mut write_index = self.write_index;
-        if write_index == self.data.len() {
-            self.data.push(data);
-        } else {
-            self.data[write_index] = data;
-        }
-        write_index += 1;
-        if write_index >= self.max_size {
-            write_index = 0;
-        }
-        self.write_index = write_index;
         self.written += 1;
         if self.written > self.reset_written {
             self.written = 0;
         }
+        let need_growth = self.needs_growth();
+        if need_growth {
+            self.data.insert(self.write_index, data);
+            // In order to avoid pushing events that have already been read back into a readable
+            // range we're also going to push any readers that are ahead of us in the buffer
+            // forward one as well.
+            for i in 0..self.reader_internal.len() {
+                unsafe {
+                    if (*self.reader_internal[i].get()).index > self.write_index {
+                        (*self.reader_internal[i].get()).index += 1;
+                    }
+                }
+            }
+            self.write_index += 1;
+        } else if self.data.len() != 0 {
+            // Check if we need to loop the write index.
+            if self.write_index == self.data.len() {
+                // If we're looping the write index then the meaning of any read indices at the end
+                // has changed, so we need to loop them too.
+                for i in 0..self.reader_internal.len() {
+                    unsafe {
+                        if (*self.reader_internal[i].get()).index == self.write_index {
+                            (*self.reader_internal[i].get()).index = 0;
+                        }
+                    }
+                }
+                // Loop the write index
+                self.write_index = 0;
+            }
+            self.data[self.write_index] = data;
+            self.write_index += 1;
+        }
     }
 
     /// Create a new reader id for this ringbuffer.
-    pub fn new_reader_id(&self) -> ReaderId<T> {
-        ReaderId::new(self.write_index, self.written)
+    pub fn new_reader_id(&mut self) -> ReaderId<T> {
+        let alive;
+        // Attempt to re-use positions from dropped readers.
+        let new_id = self.reader_internal
+            .iter()
+            .map(|ref internal| unsafe {&*internal.get()})
+            .position(|internal| !internal.alive.load(Ordering::Relaxed));
+        match new_id {
+            Some(new_id) => {
+                let reader = unsafe { &mut *self.reader_internal[new_id].get() };
+                reader.written = self.written;
+                reader.index = self.write_index;
+                reader.alive.store(true, Ordering::Relaxed);
+                alive = reader.alive.clone();
+            },
+            None => {
+                alive = Arc::new(AtomicBool::new(true));
+                self.reader_internal.push(UnsafeCell::new(InternalReaderId {
+                    written: self.written,
+                    index: self.write_index,
+                    alive: alive.clone(),
+                }));
+            },
+        }
+        ReaderId::new(
+            new_id.unwrap_or(self.reader_internal.len() - 1),
+            self.buffer_id,
+            alive,
+        )
     }
 
     /// Read data from the ringbuffer, starting where the last read ended, and up to where the last
     /// data was written.
-    pub fn read(&self, reader_id: &mut ReaderId<T>) -> ReadData<T> {
-        let num_written = if self.written < reader_id.written {
-            self.written + (self.reset_written - reader_id.written)
+    pub fn read(&self, reader_id: &mut ReaderId<T>) -> StorageIterator<T> {
+        assert!(
+            reader_id.buffer_id == self.buffer_id,
+            "ReaderID used with an event buffer it's not registered to.  Not permitted!"
+        );
+        let written = unsafe { (*self.reader_internal[reader_id.reader_id].get()).written };
+        let num_written = if self.written < written {
+            self.written + (self.reset_written - written)
         } else {
-            self.written - reader_id.written
+            self.written - written
         };
 
-        let read_index = reader_id.read_index;
-        reader_id.read_index = self.write_index;
-        reader_id.written = self.written;
+        // read index is sometimes kept at maximum in case the buffer grows, but if the buffer
+        // hasn't grown then we need to interpret the maximum index as 0.
+        let read_index = unsafe { (*self.reader_internal[reader_id.reader_id].get()).index };
 
-        if num_written > self.max_size {
-            ReadData::Overflow(
-                StorageIterator {
-                    storage: &self,
-                    current: self.write_index,
-                    end: self.write_index,
-                    started: false,
-                },
-                num_written - self.max_size,
-            )
-        } else {
-            ReadData::Data(StorageIterator {
-                storage: &self,
-                current: read_index,
-                end: self.write_index,
-                // handle corner case no data to read
-                started: num_written == 0,
-            })
+        // Update the reader indice inside the storage.  This is safe because the only time this
+        // value can be updated is when there is both a mutable reference to the reader ID
+        // and an immutable reference to the storage.  We also guaranteed above that this reader id
+        // was created by this storage.
+        unsafe {
+            let pointer: *mut InternalReaderId = self.reader_internal[reader_id.reader_id].get();
+            (*pointer).written = self.written;
+            (*pointer).index = self.write_index;
+        }
+        StorageIterator {
+            storage: &self,
+            current: read_index,
+            end: self.write_index,
+            started: num_written == 0,
         }
     }
-
-    /// The number of elements this bufer can store.
-    pub fn max_size(&self) -> usize {
-        self.max_size
-    }
-}
-
-/// Wrapper for read data. Needed because of overflow situations.
-#[derive(Debug)]
-pub enum ReadData<'a, T: 'a> {
-    /// Normal read scenario, only contains an `Iterator` over the data.
-    Data(StorageIterator<'a, T>),
-
-    /// Overflow scenario, contains an `Iterator` for the recovered data, and an indicator of how
-    /// much data was lost.
-    Overflow(StorageIterator<'a, T>, usize),
 }
 
 /// Iterator over a slice of data in `RingBufferStorage`.
@@ -183,6 +262,9 @@ impl<'a, T> Iterator for StorageIterator<'a, T> {
             None
         } else {
             self.started = true;
+            if self.current == self.storage.data.len() && self.end != self.storage.data.len() {
+                self.current = 0;
+            }
             let item = &self.storage[self.current];
             self.current += 1;
             if self.current == self.storage.data.len() && self.end != self.storage.data.len() {
@@ -224,97 +306,135 @@ mod tests {
     #[test]
     fn test_empty_write() {
         let mut buffer = RingBufferStorage::<Test>::new(10);
-        let r = buffer.drain_vec_write(&mut vec![]);
-        assert!(r.is_ok());
+        buffer.drain_vec_write(&mut vec![]);
+        assert_eq!(buffer.data.len(), 0);
     }
 
     #[test]
     fn test_too_large_write() {
         let mut buffer = RingBufferStorage::<Test>::new(10);
-        let r = buffer.drain_vec_write(&mut events(15));
-        assert!(r.is_err());
-        match r {
-            Err(RBError::TooLargeWrite) => (),
-            _ => panic!(),
-        }
+        // Events just go off into the void if there's no reader registered.
+        let _reader = buffer.new_reader_id();
+        buffer.drain_vec_write(&mut events(15));
+        assert_eq!(buffer.data.len(), 15);
     }
 
     #[test]
     fn test_empty_read() {
-        let buffer = RingBufferStorage::<Test>::new(10);
+        let mut buffer = RingBufferStorage::<Test>::new(10);
         let mut reader_id = buffer.new_reader_id();
-        match buffer.read(&mut reader_id) {
-            ReadData::Data(data) => {
-                assert_eq!(Vec::<Test>::default(), data.cloned().collect::<Vec<_>>())
-            }
-            _ => panic!(),
-        }
+        let data = buffer.read(&mut reader_id);
+        assert_eq!(Vec::<Test>::default(), data.cloned().collect::<Vec<_>>())
     }
 
     #[test]
     fn test_empty_read_write_before_id() {
         let mut buffer = RingBufferStorage::<Test>::new(10);
-        assert!(buffer.drain_vec_write(&mut events(2)).is_ok());
+        buffer.drain_vec_write(&mut events(2));
         let mut reader_id = buffer.new_reader_id();
-        match buffer.read(&mut reader_id) {
-            ReadData::Data(data) => {
-                assert_eq!(Vec::<Test>::default(), data.cloned().collect::<Vec<_>>())
-            }
-            _ => panic!(),
-        }
+        let data = buffer.read(&mut reader_id);
+        assert_eq!(Vec::<Test>::default(), data.cloned().collect::<Vec<_>>())
     }
 
     #[test]
     fn test_read() {
         let mut buffer = RingBufferStorage::<Test>::new(10);
         let mut reader_id = buffer.new_reader_id();
-        assert!(buffer.drain_vec_write(&mut events(2)).is_ok());
-        match buffer.read(&mut reader_id) {
-            ReadData::Data(data) => assert_eq!(
-                vec![Test { id: 0 }, Test { id: 1 }],
-                data.cloned().collect::<Vec<_>>()
-            ),
-            _ => panic!(),
-        }
+        buffer.drain_vec_write(&mut events(2));
+        assert_eq!(
+            vec![Test { id: 0 }, Test { id: 1 }],
+            buffer.read(&mut reader_id).cloned().collect::<Vec<_>>()
+        );
+
+        assert_eq!(
+            Vec::<Test>::new(),
+            buffer.read(&mut reader_id).cloned().collect::<Vec<_>>()
+        );
     }
 
     #[test]
     fn test_write_overflow() {
         let mut buffer = RingBufferStorage::<Test>::new(3);
         let mut reader_id = buffer.new_reader_id();
-        assert!(buffer.drain_vec_write(&mut events(2)).is_ok());
-        assert!(buffer.drain_vec_write(&mut events(2)).is_ok());
-        let r = buffer.read(&mut reader_id);
-        match r {
-            ReadData::Overflow(lost_data, lost_size) => {
-                // we wrote 4 data points into a buffer of size 3, that means we've lost 1 data
-                // point
-                assert_eq!(1, lost_size);
-                // we wrote 0,1,0,1, we will be able to salvage the last 3 data points, since the
-                // buffer is of size 3
-                assert_eq!(
-                    vec![Test { id: 1 }, Test { id: 0 }, Test { id: 1 }],
-                    lost_data.cloned().collect::<Vec<_>>()
-                );
-            }
-            _ => panic!(),
+        buffer.drain_vec_write(&mut events(4));
+        let data = buffer.read(&mut reader_id);
+        assert_eq!(
+            vec![
+                Test { id: 0 },
+                Test { id: 1 },
+                Test { id: 2 },
+                Test { id: 3 },
+            ],
+            data.cloned().collect::<Vec<_>>()
+        );
+    }
+
+    /// If you're getting a compilation error here this test has failed!
+    #[test]
+    fn test_send_sync() {
+        trait SendSync: Send + Sync {
+            fn is_send_sync() -> bool;
         }
+
+        impl<T> SendSync for T where T: Send + Sync {
+            fn is_send_sync() -> bool { true }
+        }
+
+        assert!(RingBufferStorage::<Test>::is_send_sync());
+        assert!(ReaderId::<Test>::is_send_sync());
+    }
+
+    #[test]
+    fn test_reader_reuse() {
+        let mut buffer = RingBufferStorage::<Test>::new(3);
+        {
+            let _reader_id = buffer.new_reader_id();
+        }
+        let _reader_id = buffer.new_reader_id();
+        assert_eq!(buffer.reader_internal.len(), 1);
+    }
+
+    #[test]
+    fn test_prevent_excess_growth() {
+        let mut buffer = RingBufferStorage::<Test>::new(3);
+        let mut reader_id = buffer.new_reader_id();
+        buffer.drain_vec_write(&mut events(2));
+        buffer.drain_vec_write(&mut events(2));
+        // we wrote 0,1,0,1, if the buffer grew correctly we'll get all of these back.
+        assert_eq!(
+            vec![
+                Test { id: 0 },
+                Test { id: 1 },
+                Test { id: 0 },
+                Test { id: 1 },
+            ],
+            buffer.read(&mut reader_id).cloned().collect::<Vec<_>>()
+        );
+
+        buffer.drain_vec_write(&mut events(4));
+        // After writing 4 more events the buffer should have no reason to grow beyond four.
+        assert_eq!(buffer.data.len(), 4);
+        assert_eq!(
+            vec![
+                Test { id: 0 },
+                Test { id: 1 },
+                Test { id: 2 },
+                Test { id: 3 },
+            ],
+            buffer.read(&mut reader_id).cloned().collect::<Vec<_>>()
+        );
     }
 
     #[test]
     fn test_write_slice() {
         let mut buffer = RingBufferStorage::<Test>::new(10);
         let mut reader_id = buffer.new_reader_id();
-        assert!(buffer.iter_write(events(2)).is_ok());
-        match buffer.read(&mut reader_id) {
-            ReadData::Data(data) => {
-                assert_eq!(
-                    vec![Test { id: 0 }, Test { id: 1 }],
-                    data.cloned().collect::<Vec<_>>()
-                );
-            }
-            _ => panic!(),
-        }
+        buffer.iter_write(events(2));
+        let data = buffer.read(&mut reader_id);
+        assert_eq!(
+            vec![Test { id: 0 }, Test { id: 1 }],
+            data.cloned().collect::<Vec<_>>()
+        );
     }
 
     fn events(n: u32) -> Vec<Test> {

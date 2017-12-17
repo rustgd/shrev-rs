@@ -1,6 +1,6 @@
 extern crate shrev;
 
-use shrev::{EventChannel, EventReadData};
+use shrev::EventChannel;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TestEvent {
@@ -10,31 +10,33 @@ pub struct TestEvent {
 fn main() {
     let mut channel = EventChannel::new();
 
-    channel
-        .drain_vec_write(&mut vec![TestEvent { data: 1 }, TestEvent { data: 2 }])
-        .expect("");
+    channel.drain_vec_write(&mut vec![TestEvent { data: 1 }, TestEvent { data: 2 }]);
 
     let mut reader_id = channel.register_reader();
 
     // Should be empty, because reader was created after the write
-    match channel.read(&mut reader_id) {
-        EventReadData::Data(data) => assert_eq!(
-            Vec::<TestEvent>::default(),
-            data.cloned().collect::<Vec<_>>()
-        ),
-        _ => panic!(),
-    }
-
-    channel
-        .slice_write(&mut [TestEvent { data: 8 }, TestEvent { data: 9 }])
-        .expect("");
+    assert_eq!(
+        Vec::<TestEvent>::default(),
+        channel.read(&mut reader_id).cloned().collect::<Vec<_>>()
+    );
 
     // Should have data, as a second write was done
+    channel.single_write(TestEvent { data: 5 });
+
+    assert_eq!(
+        vec![TestEvent { data: 5 }],
+        channel.read(&mut reader_id).cloned().collect::<Vec<_>>()
+    );
+
+    // We can also just send in an iterator.
+    channel.iter_write(
+        [TestEvent { data: 8 }, TestEvent { data: 9 }]
+            .iter()
+            .cloned(),
+    );
+
     assert_eq!(
         vec![TestEvent { data: 8 }, TestEvent { data: 9 }],
-        channel
-            .lossy_read(&mut reader_id)
-            .cloned()
-            .collect::<Vec<_>>()
+        channel.read(&mut reader_id).cloned().collect::<Vec<_>>()
     );
 }
