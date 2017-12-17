@@ -60,7 +60,11 @@ pub struct RingBufferStorage<T> {
     current_longest_reader: usize,
 }
 
-unsafe impl<T> Sync for RingBufferStorage<T> where T: Sync {}
+unsafe impl<T> Sync for RingBufferStorage<T>
+where
+    T: Sync,
+{
+}
 
 impl<T: 'static> RingBufferStorage<T> {
     /// Create a new ring buffer with the given max size.
@@ -94,7 +98,8 @@ impl<T: 'static> RingBufferStorage<T> {
     fn needs_growth(&mut self) -> bool {
         let mut cached_num_written = 0;
         let cache_valid = if self.reader_internal.len() > self.current_longest_reader {
-            let cached_reader = unsafe { &*self.reader_internal[self.current_longest_reader].get() };
+            let cached_reader =
+                unsafe { &*self.reader_internal[self.current_longest_reader].get() };
             cached_num_written = if self.written < cached_reader.written {
                 self.written + (self.reset_written - cached_reader.written)
             } else {
@@ -109,7 +114,7 @@ impl<T: 'static> RingBufferStorage<T> {
         } else {
             let (longest_reader, num_written) = self.reader_internal
                 .iter()
-                .map(|ref internal| unsafe {&*internal.get()})
+                .map(|ref internal| unsafe { &*internal.get() })
                 .enumerate()
                 .filter_map(|(i, internal)| {
                     if internal.alive.load(Ordering::Relaxed) {
@@ -181,7 +186,7 @@ impl<T: 'static> RingBufferStorage<T> {
         // Attempt to re-use positions from dropped readers.
         let new_id = self.reader_internal
             .iter()
-            .map(|ref internal| unsafe {&*internal.get()})
+            .map(|ref internal| unsafe { &*internal.get() })
             .position(|internal| !internal.alive.load(Ordering::Relaxed));
         match new_id {
             Some(new_id) => {
@@ -190,7 +195,7 @@ impl<T: 'static> RingBufferStorage<T> {
                 reader.index = self.write_index;
                 reader.alive.store(true, Ordering::Relaxed);
                 alive = reader.alive.clone();
-            },
+            }
             None => {
                 alive = Arc::new(AtomicBool::new(true));
                 self.reader_internal.push(UnsafeCell::new(InternalReaderId {
@@ -198,7 +203,7 @@ impl<T: 'static> RingBufferStorage<T> {
                     index: self.write_index,
                     alive: alive.clone(),
                 }));
-            },
+            }
         }
         ReaderId::new(
             new_id.unwrap_or(self.reader_internal.len() - 1),
@@ -376,8 +381,13 @@ mod tests {
             fn is_send_sync() -> bool;
         }
 
-        impl<T> SendSync for T where T: Send + Sync {
-            fn is_send_sync() -> bool { true }
+        impl<T> SendSync for T
+        where
+            T: Send + Sync,
+        {
+            fn is_send_sync() -> bool {
+                true
+            }
         }
 
         assert!(RingBufferStorage::<Test>::is_send_sync());
