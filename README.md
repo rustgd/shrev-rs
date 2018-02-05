@@ -8,7 +8,7 @@ meant to be used as a resource in [`specs`].
 ```rust
 extern crate shrev;
 
-use shrev::{EventChannel, EventReadData};
+use shrev::EventChannel;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TestEvent {
@@ -17,7 +17,7 @@ pub struct TestEvent {
 
 fn main() {
     let mut channel = EventChannel::new();
-    
+
     channel.drain_vec_write(&mut vec![TestEvent { data: 1 }, TestEvent { data: 2 }]);
 
     let mut reader_id = channel.register_reader();
