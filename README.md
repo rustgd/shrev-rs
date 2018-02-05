@@ -1,3 +1,5 @@
+[![crates.io badge](https://img.shields.io/crates/v/shrev.svg)](https://crates.io/crates/shrev) [![docs badge](https://docs.rs/shrev/badge.svg)](https://docs.rs/shrev)
+
 A pull based event channel, with events stored in a ring buffer,
 meant to be used as a resource in [`specs`].
  
