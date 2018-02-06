@@ -1,3 +1,5 @@
+[![crates.io badge](https://img.shields.io/crates/v/shrev.svg)](https://crates.io/crates/shrev) [![docs badge](https://docs.rs/shrev/badge.svg)](https://docs.rs/shrev)
+
 A pull based event channel, with events stored in a ring buffer,
 meant to be used as a resource in [`specs`].
  
@@ -8,7 +10,7 @@ meant to be used as a resource in [`specs`].
 ```rust
 extern crate shrev;
 
-use shrev::{EventChannel, EventReadData};
+use shrev::EventChannel;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TestEvent {
@@ -17,7 +19,7 @@ pub struct TestEvent {
 
 fn main() {
     let mut channel = EventChannel::new();
-    
+
     channel.drain_vec_write(&mut vec![TestEvent { data: 1 }, TestEvent { data: 2 }]);
 
     let mut reader_id = channel.register_reader();
