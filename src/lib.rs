@@ -34,7 +34,7 @@ impl<E> EventChannel<E>
 where
     E: Event,
 {
-    /// Create a new EventChannel with a default size of 200
+    /// Create a new EventChannel with a default size of 50
     pub fn new() -> Self {
         Self::with_capacity(DEFAULT_CAPACITY)
     }
