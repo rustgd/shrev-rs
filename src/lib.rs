@@ -30,6 +30,15 @@ pub struct EventChannel<E> {
     storage: RingBufferStorage<E>,
 }
 
+impl<E> Default for EventChannel<E>
+where
+    E: Event,
+{
+    fn default() -> Self {
+        EventChannel::new()
+    }
+}
+
 impl<E> EventChannel<E>
 where
     E: Event,
