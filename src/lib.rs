@@ -3,12 +3,12 @@
 //!
 //! See examples directory for examples.
 
-#![deny(missing_docs)]
+#![warn(missing_docs)]
 
 pub use storage::ReaderId;
 pub use storage::StorageIterator as EventIterator;
 
-use storage::RingBufferStorage;
+use storage::RingBuffer;
 
 mod storage;
 
@@ -23,11 +23,11 @@ where
 {
 }
 
-const DEFAULT_CAPACITY: usize = 50;
+const DEFAULT_CAPACITY: usize = 64;
 
 /// Event channel
 pub struct EventChannel<E> {
-    storage: RingBufferStorage<E>,
+    storage: RingBuffer<E>,
 }
 
 impl<E> Default for EventChannel<E>
@@ -51,7 +51,7 @@ where
     /// Create a new EventChannel with the given starting capacity.
     pub fn with_capacity(size: usize) -> Self {
         Self {
-            storage: RingBufferStorage::new(size),
+            storage: RingBuffer::new(size),
         }
     }
 
@@ -99,12 +99,39 @@ where
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
     #[derive(Debug, Clone, PartialEq)]
     struct Test {
         pub id: u32,
+    }
+
+    #[test]
+    fn test_grow() {
+        let mut channel = EventChannel::with_capacity(10);
+
+        let mut reader0 = channel.register_reader();
+        let mut reader1 = channel.register_reader();
+
+        channel.iter_write(vec![1, 2, 3, 4, 5, 6, 7, 8]);
+
+        let data = channel.read(&mut reader0).cloned().collect::<Vec<_>>();
+        assert_eq!(data, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+
+        channel.iter_write(vec![9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
+
+        let data = channel.read(&mut reader0).cloned().collect::<Vec<_>>();
+        assert_eq!(
+            data,
+            vec![9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+        );
+
+        for i in 23..10_000 {
+            channel.single_write(i);
+        }
+
+        let data = channel.read(&mut reader1).cloned().collect::<Vec<_>>();
+        assert_eq!(data, (1..10_000).collect::<Vec<_>>());
     }
 
     #[test]
