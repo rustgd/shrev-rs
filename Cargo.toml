@@ -13,3 +13,4 @@ description = "Event channel, meant to be used with `specs`."
 keywords = ["specs", "events"]
 
 [dependencies]
+parking_lot = "0.5.5"

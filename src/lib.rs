@@ -5,6 +5,8 @@
 
 #![warn(missing_docs)]
 
+extern crate parking_lot;
+
 pub use storage::ReaderId;
 pub use storage::StorageIterator as EventIterator;
 
