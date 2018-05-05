@@ -12,6 +12,15 @@ struct CircularIndex {
     size: usize,
 }
 
+impl CircularIndex {
+    pub fn at_end(size: usize) -> Self {
+        CircularIndex {
+            index: size - 1,
+            size,
+        }
+    }
+}
+
 impl Add<usize> for CircularIndex {
     type Output = usize;
 
@@ -54,27 +63,44 @@ impl<T> InsertOverwrite<T> for Vec<T> {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 struct Reader {
-
+    last_index: usize,
 }
 
 /// The reader id is used by readers to tell the storage where the last read ended.
 #[derive(Debug)]
 pub struct ReaderId<T: 'static> {
-    index: usize,
+    id: usize,
     marker: PhantomData<&'static [T]>,
-    num_wraps: usize,
 }
 
 #[derive(Debug)]
 struct ReaderMeta {
+    /// Free ids
+    free: Vec<usize>,
+    readers: Vec<Reader>,
+}
 
+impl ReaderMeta {
+    fn nearest_index(&mut self, current: CircularIndex) -> Option<usize> {
+        self.readers
+            .iter()
+            .filter(|reader| reader.last_index != !0)
+            .map(|r| r.last_index)
+            .min_by_key(|&index| {
+                CircularIndex {
+                    index,
+                    size: current.size,
+                } - current.index
+            })
+    }
 }
 
 /// Ring buffer, holding data of type `T`.
 #[derive(Debug)]
 pub struct RingBuffer<T> {
-    current_index: CircularIndex,
+    last_index: CircularIndex,
     data: Vec<T>,
     nearest_reader: usize,
     meta: Mutex<ReaderMeta>,
@@ -90,10 +116,13 @@ impl<T: 'static> RingBuffer<T> {
         assert!(size > 1);
 
         RingBuffer {
-            current_index: CircularIndex { index: 0, size },
+            last_index: CircularIndex::at_end(size),
             data: vec![],
             nearest_reader: !0,
-            meta: Mutex::new(ReaderMeta {}),
+            meta: Mutex::new(ReaderMeta {
+                free: vec![],
+                readers: vec![],
+            }),
             needs_growth: false,
             num_wraps: Wrapping(0),
         }
@@ -116,9 +145,7 @@ impl<T: 'static> RingBuffer<T> {
 
     /// Ensures that `num` elements can be inserted.
     /// Does nothing if there's enough space, grows the buffer otherwise.
-    pub fn ensure_additional(&mut self, num: usize) {
-
-    }
+    pub fn ensure_additional(&mut self, num: usize) {}
 
     /// Write a single data point into the ring buffer.
     pub fn single_write(&mut self, element: T) {
@@ -132,10 +159,19 @@ impl<T: 'static> RingBuffer<T> {
 
     /// Create a new reader id for this ring buffer.
     pub fn new_reader_id(&mut self) -> ReaderId<T> {
+        let meta = self.meta.get_mut();
+        let id = meta.free.pop().or_else(|| {
+            let id = meta.readers.len();
+            meta.readers.push(Reader {
+                last_index: self.last_index,
+            });
+
+            id
+        });
+
         ReaderId {
-            index: self.current_index.index,
+            id,
             marker: PhantomData,
-            num_wraps: self.num_wraps.0,
         }
     }
 
