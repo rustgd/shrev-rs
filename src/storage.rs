@@ -13,10 +13,35 @@ struct CircularIndex {
 }
 
 impl CircularIndex {
-    pub fn at_end(size: usize) -> Self {
+    fn new(index: usize, size: usize) -> Self {
+        CircularIndex {
+            index,
+            size,
+        }
+    }
+
+    fn at_end(size: usize) -> Self {
         CircularIndex {
             index: size - 1,
             size,
+        }
+    }
+
+    fn step(&mut self, inclusive_end: usize) -> Option<usize> {
+        match self.index {
+            x if x == !0 => None,
+            x if x == inclusive_end => {
+                let r = Some(x);
+                self.index = !0;
+
+                r
+            },
+            x => {
+                let r = Some(x);
+                *self += 1;
+
+                r
+            }
         }
     }
 }
@@ -83,7 +108,7 @@ struct ReaderMeta {
 }
 
 impl ReaderMeta {
-    fn nearest_index(&mut self, current: CircularIndex) -> Option<usize> {
+    fn nearest_index(&self, current: CircularIndex) -> Option<usize> {
         self.readers
             .iter()
             .filter(|reader| reader.last_index != !0)
@@ -149,10 +174,11 @@ impl<T: 'static> RingBuffer<T> {
 
     /// Write a single data point into the ring buffer.
     pub fn single_write(&mut self, element: T) {
-        self.data.write_or_push(self.current_index.index, element);
+        self.ensure_additional(1);
+        self.last_index += 1;
+        self.data.write_or_push(self.last_index.index, element);
 
-        self.current_index += 1;
-        if self.current_index.index == 0 {
+        if self.last_index.index == 0 {
             self.num_wraps += Wrapping(1);
         }
     }
@@ -160,10 +186,10 @@ impl<T: 'static> RingBuffer<T> {
     /// Create a new reader id for this ring buffer.
     pub fn new_reader_id(&mut self) -> ReaderId<T> {
         let meta = self.meta.get_mut();
-        let id = meta.free.pop().or_else(|| {
+        let id = meta.free.pop().unwrap_or_else(|| {
             let id = meta.readers.len();
             meta.readers.push(Reader {
-                last_index: self.last_index,
+                last_index: self.last_index.index,
             });
 
             id
@@ -180,15 +206,12 @@ impl<T: 'static> RingBuffer<T> {
     pub fn read(&self, reader_id: &mut ReaderId<T>) -> StorageIterator<T> {
         let iter = StorageIterator {
             data: &self.data,
-            full: self.current_index.index == reader_id.index
-                && self.num_wraps.0 != reader_id.num_wraps,
-            end: self.current_index.index,
-            index: reader_id.index,
-            wrap: self.current_index.size,
+            end: self.last_index.index,
+            index: unimplemented!(),
         };
 
-        reader_id.index = self.current_index.index;
-        reader_id.num_wraps = self.num_wraps.0;
+        //reader_id.index = self.current_index.index;
+        //reader_id.num_wraps = self.num_wraps.0;
 
         iter
     }
@@ -198,11 +221,9 @@ impl<T: 'static> RingBuffer<T> {
 #[derive(Debug)]
 pub struct StorageIterator<'a, T: 'a> {
     data: &'a [T],
-    full: bool,
-    /// Exclusive end
+    /// Inclusive end
     end: usize,
-    index: usize,
-    wrap: usize,
+    index: CircularIndex,
 }
 
 impl<'a, T> Iterator for StorageIterator<'a, T> {
@@ -210,23 +231,24 @@ impl<'a, T> Iterator for StorageIterator<'a, T> {
 
     fn next(&mut self) -> Option<&'a T> {
         println!(
-            "Index: {}, end: {}, len: {}, wrap: {}",
+            "Index: {:?}, end: {}, len: {}",
             self.index,
             self.end,
             self.data.len(),
-            self.wrap
+            //self.wrap
         );
 
-        if self.full || self.index != self.end {
-            self.full = false;
-            self.index = self.index % self.wrap;
-            let elem = Some(&self.data[self.index]);
-            self.index += 1;
-
-            elem
-        } else {
-            None
-        }
+//        if self.index != self.end {
+//            //self.full = false;
+//            self.index = self.index % self.wrap;
+//            let elem = Some(&self.data[self.index]);
+//            self.index += 1;
+//
+//            elem
+//        } else {
+//            None
+//        }
+        self.index.step(self.end).map(|i| &self.data[i])
     }
 }
 
