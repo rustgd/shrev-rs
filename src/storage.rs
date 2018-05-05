@@ -1,7 +1,6 @@
 //! Ring buffer implementation, that does immutable reads.
 
 use std::marker::PhantomData;
-use std::num::Wrapping;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 
 use parking_lot::Mutex;
@@ -14,10 +13,7 @@ struct CircularIndex {
 
 impl CircularIndex {
     fn new(index: usize, size: usize) -> Self {
-        CircularIndex {
-            index,
-            size,
-        }
+        CircularIndex { index, size }
     }
 
     fn at_end(size: usize) -> Self {
@@ -35,7 +31,7 @@ impl CircularIndex {
                 self.index = !0;
 
                 r
-            },
+            }
             x => {
                 let r = Some(x);
                 *self += 1;
@@ -108,16 +104,17 @@ struct ReaderMeta {
 }
 
 impl ReaderMeta {
-    fn nearest_index(&self, current: CircularIndex) -> Option<usize> {
+    fn nearest_index(&self, current: CircularIndex) -> Option<CircularIndex> {
         self.readers
             .iter()
             .filter(|reader| reader.last_index != !0)
             .map(|r| r.last_index)
+            .map(|index| CircularIndex {
+                index,
+                size: current.size,
+            })
             .min_by_key(|&index| {
-                CircularIndex {
-                    index,
-                    size: current.size,
-                } - current.index
+                index - current.index
             })
     }
 }
@@ -129,10 +126,6 @@ pub struct RingBuffer<T> {
     data: Vec<T>,
     nearest_reader: usize,
     meta: Mutex<ReaderMeta>,
-    /// If `current_index` == `nearest_reader` and `needs_growth` is true,
-    /// a call to `grow_internal` is necessary.
-    needs_growth: bool,
-//    num_wraps: Wrapping<usize>,
 }
 
 impl<T: 'static> RingBuffer<T> {
@@ -148,8 +141,6 @@ impl<T: 'static> RingBuffer<T> {
                 free: vec![],
                 readers: vec![],
             }),
-            needs_growth: false,
-//            num_wraps: Wrapping(0),
         }
     }
 
@@ -170,27 +161,45 @@ impl<T: 'static> RingBuffer<T> {
 
     /// Ensures that `num` elements can be inserted.
     /// Does nothing if there's enough space, grows the buffer otherwise.
-    pub fn ensure_additional(&mut self, num: usize) {}
+    pub fn ensure_additional(&mut self, num: usize) {
+        let meta = self.meta.get_mut();
+        let nearest = meta.nearest_index(CircularIndex::new(
+            self.last_index + 1,
+            self.last_index.size,
+        ));
+
+        let grow_by = match nearest {
+            None => return,
+            Some(index) => {
+                let mut cursor = self.last_index.clone();
+                cursor += 1;
+                // If the cursor points to the nearest read index now, we still have one element
+                // to write
+                let left = (index - cursor) + 1;
+
+                if left >= num {
+                    return;
+                } else {
+                    num - left
+                }
+            }
+        };
+    }
 
     /// Write a single data point into the ring buffer.
     pub fn single_write(&mut self, element: T) {
         self.ensure_additional(1);
         self.last_index += 1;
         self.data.write_or_push(self.last_index.index, element);
-
-//        if self.last_index.index == 0 {
-//            self.num_wraps += Wrapping(1);
-//        }
     }
 
     /// Create a new reader id for this ring buffer.
     pub fn new_reader_id(&mut self) -> ReaderId<T> {
         let meta = self.meta.get_mut();
+        let last_index = self.last_index.index;
         let id = meta.free.pop().unwrap_or_else(|| {
             let id = meta.readers.len();
-            meta.readers.push(Reader {
-                last_index: self.last_index.index,
-            });
+            meta.readers.push(Reader { last_index });
 
             id
         });
@@ -235,19 +244,18 @@ impl<'a, T> Iterator for StorageIterator<'a, T> {
             self.index,
             self.end,
             self.data.len(),
-            //self.wrap
         );
 
-//        if self.index != self.end {
-//            //self.full = false;
-//            self.index = self.index % self.wrap;
-//            let elem = Some(&self.data[self.index]);
-//            self.index += 1;
-//
-//            elem
-//        } else {
-//            None
-//        }
+        //        if self.index != self.end {
+        //            //self.full = false;
+        //            self.index = self.index % self.wrap;
+        //            let elem = Some(&self.data[self.index]);
+        //            self.index += 1;
+        //
+        //            elem
+        //        } else {
+        //            None
+        //        }
         self.index.step(self.end).map(|i| &self.data[i])
     }
 }
