@@ -1,11 +1,11 @@
 //! Ring buffer implementation, that does immutable reads.
 
-use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::marker::PhantomData;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 use std::ptr;
 
 use parking_lot::Mutex;
+use std::num::Wrapping;
 
 #[derive(Clone, Copy, Debug)]
 struct CircularIndex {
@@ -23,6 +23,13 @@ impl CircularIndex {
             index: size - 1,
             size,
         }
+    }
+
+    /// A magic value (!0).
+    /// This value gets set when calling `step` and we reached
+    /// the end.
+    fn magic(size: usize) -> Self {
+        CircularIndex::new(!0, size)
     }
 
     fn step(&mut self, inclusive_end: usize) -> Option<usize> {
@@ -75,7 +82,7 @@ impl SubAssign<usize> for CircularIndex {
 #[derive(Derivative)]
 #[derivative(Debug)]
 struct Data<T> {
-    #[derivative(Debug="ignore")]
+    #[derivative(Debug = "ignore")]
     data: Vec<T>,
     uninitialized: usize,
 }
@@ -98,7 +105,7 @@ impl<T> Data<T> {
         self.data.get_unchecked(index)
     }
 
-    unsafe fn insert(&mut self, cursor: usize, elem: T) {
+    unsafe fn put(&mut self, cursor: usize, elem: T) {
         if self.uninitialized > 0 {
             // There is no element stored under `cursor`
             // -> do not drop anything!
@@ -148,10 +155,16 @@ impl<T> Data<T> {
 
         self.data.set_len(0);
     }
+
+    #[cfg(test)]
+    fn num_initialized(&self) -> usize {
+        self.data.len() - self.uninitialized
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
 struct Reader {
+    generation: usize,
     last_index: usize,
 }
 
@@ -170,16 +183,25 @@ struct ReaderMeta {
 }
 
 impl ReaderMeta {
-    fn nearest_index(&self, current: CircularIndex) -> Option<CircularIndex> {
+    fn nearest_index(&self, last: CircularIndex, current_gen: usize) -> Option<(CircularIndex, usize)> {
         self.readers
             .iter()
             .filter(|reader| reader.last_index != !0)
-            .map(|r| r.last_index)
-            .map(|index| CircularIndex {
-                index,
-                size: current.size,
+            .map(|r| {
+                (
+                    CircularIndex {
+                        index: r.last_index,
+                        size: last.size,
+                    },
+                    r.generation,
+                )
             })
-            .min_by_key(|&index| index - current.index)
+            .min_by_key(|&(index, gen)| match index - last.index {
+                0 if gen == current_gen => last.size,
+                x => x,
+            })
+
+        // TODO: return how many elements are left
     }
 }
 
@@ -188,6 +210,7 @@ impl ReaderMeta {
 pub struct RingBuffer<T> {
     last_index: CircularIndex,
     data: Data<T>,
+    generation: Wrapping<usize>,
     nearest_reader: usize,
     meta: Mutex<ReaderMeta>,
 }
@@ -200,6 +223,7 @@ impl<T: 'static> RingBuffer<T> {
         RingBuffer {
             last_index: CircularIndex::at_end(size),
             data: Data::new(size),
+            generation: Wrapping(0),
             nearest_reader: !0,
             meta: Mutex::new(ReaderMeta {
                 free: vec![],
@@ -227,19 +251,22 @@ impl<T: 'static> RingBuffer<T> {
     /// Does nothing if there's enough space, grows the buffer otherwise.
     pub fn ensure_additional(&mut self, num: usize) {
         let meta = self.meta.get_mut();
-        let nearest = meta.nearest_index(CircularIndex::new(
-            self.last_index + 1,
-            self.last_index.size,
-        ));
+        let nearest = meta.nearest_index(self.last_index, self.generation.0);
 
         let grow_by = match nearest {
             None => return,
-            Some(index) => {
-                let mut cursor = self.last_index.clone();
-                cursor += 1;
-                // If the cursor points to the nearest read index now, we still have one element
-                // to write
-                let left = (index - cursor) + 1;
+            Some((nearest, gen)) => {
+                // If the last write index points to the nearest read index, we have 0 elements
+                // left.
+                let left = match nearest - self.last_index.index {
+                    0 if gen == self.generation.0 => self.last_index.size,
+                    x => x,
+                };
+
+                println!(
+                    "There are {} elements left ({:?} - {:?})",
+                    left, nearest, self.last_index
+                );
 
                 if left >= num {
                     return;
@@ -248,29 +275,70 @@ impl<T: 'static> RingBuffer<T> {
                 }
             }
         };
+
+        println!(
+            "Determined that a growth by {} is necessary at last index {:?}",
+            grow_by, self.last_index
+        );
+
         // Make sure size' = 2^n * size
         let mut size = 2 * self.last_index.size;
         while size < grow_by {
             size *= 2;
         }
 
+        // Calculate adjusted growth
+        let grow_by = size - self.last_index.size;
+
         // Insert the additional elements
+        unsafe {
+            self.data.grow(self.last_index + 1, grow_by);
+        }
+        self.last_index.size = size;
+
+        // TODO: shift reader indices
+        // TODO: cache available
+        for reader in &mut meta.readers {
+            let reader = reader as &mut Reader;
+            if reader.last_index == !0 {
+                continue;
+            }
+
+            // TOOO does not shift correctly yet
+            // TODO but we also need to handle generations here
+            // TODO probably try to add a method to `Reader`
+            if reader.last_index > self.last_index.index {
+                reader.last_index += grow_by;
+            }
+        }
     }
 
     /// Write a single data point into the ring buffer.
     pub fn single_write(&mut self, element: T) {
         self.ensure_additional(1);
+        println!(
+            "Single write, last index: {:?}, putting at {}",
+            self.last_index,
+            self.last_index + 1
+        );
+        unsafe {
+            self.data.put(self.last_index + 1, element);
+        }
         self.last_index += 1;
-        self.data.write_or_push(self.last_index.index, element);
+        self.generation += Wrapping(1);
     }
 
     /// Create a new reader id for this ring buffer.
     pub fn new_reader_id(&mut self) -> ReaderId<T> {
         let meta = self.meta.get_mut();
         let last_index = self.last_index.index;
+        let generation = self.generation.0;
         let id = meta.free.pop().unwrap_or_else(|| {
             let id = meta.readers.len();
-            meta.readers.push(Reader { last_index });
+            meta.readers.push(Reader {
+                generation,
+                last_index,
+            });
 
             id
         });
@@ -284,14 +352,29 @@ impl<T: 'static> RingBuffer<T> {
     /// Read data from the ring buffer, starting where the last read ended, and up to where the last
     /// element was written.
     pub fn read(&self, reader_id: &mut ReaderId<T>) -> StorageIterator<T> {
+        let (last_read_index, gen) = {
+            let mut meta = self.meta.lock();
+
+            let reader = &mut meta.readers[reader_id.id];
+            let old = reader.last_index;
+            reader.last_index = self.last_index.index;
+            let old_gen = reader.generation;
+            reader.generation = self.generation.0;
+
+            (old, old_gen)
+        };
+        let mut index = CircularIndex::new(last_read_index, self.last_index.size);
+        index += 1;
+        if gen == self.generation.0 {
+            // It is empty
+            index = CircularIndex::magic(index.size);
+        }
+
         let iter = StorageIterator {
             data: &self.data,
             end: self.last_index.index,
-            index: unimplemented!(),
+            index,
         };
-
-        //reader_id.index = self.current_index.index;
-        //reader_id.num_wraps = self.num_wraps.0;
 
         iter
     }
@@ -299,14 +382,16 @@ impl<T: 'static> RingBuffer<T> {
 
 impl<T> Drop for RingBuffer<T> {
     fn drop(&mut self) {
-        unsafe { self.data.clean(self.last_index + 1); }
+        unsafe {
+            self.data.clean(self.last_index + 1);
+        }
     }
 }
 
 /// Iterator over a slice of data in `RingBufferStorage`.
 #[derive(Debug)]
 pub struct StorageIterator<'a, T: 'a> {
-    data: &'a [T],
+    data: &'a Data<T>,
     /// Inclusive end
     end: usize,
     index: CircularIndex,
@@ -316,12 +401,7 @@ impl<'a, T> Iterator for StorageIterator<'a, T> {
     type Item = &'a T;
 
     fn next(&mut self) -> Option<&'a T> {
-        println!(
-            "Index: {:?}, end: {}, len: {}",
-            self.index,
-            self.end,
-            self.data.len(),
-        );
+        println!("index: {:?}, end: {}", self.index, self.end,);
 
         //        if self.index != self.end {
         //            //self.full = false;
@@ -333,7 +413,9 @@ impl<'a, T> Iterator for StorageIterator<'a, T> {
         //        } else {
         //            None
         //        }
-        self.index.step(self.end).map(|i| &self.data[i])
+        self.index
+            .step(self.end)
+            .map(|i| unsafe { self.data.get(i) })
     }
 }
 
@@ -370,7 +452,7 @@ mod tests {
     fn test_empty_write() {
         let mut buffer = RingBuffer::<Test>::new(10);
         buffer.drain_vec_write(&mut vec![]);
-        assert_eq!(buffer.data.len(), 0);
+        assert_eq!(buffer.data.num_initialized(), 0);
     }
 
     #[test]
@@ -379,7 +461,7 @@ mod tests {
         // Events just go off into the void if there's no reader registered.
         let _reader = buffer.new_reader_id();
         buffer.drain_vec_write(&mut events(15));
-        assert_eq!(buffer.data.len(), 15);
+        assert_eq!(buffer.data.num_initialized(), 15);
     }
 
     #[test]
@@ -466,8 +548,12 @@ mod tests {
     fn test_prevent_excess_growth() {
         let mut buffer = RingBuffer::<Test>::new(3);
         let mut reader_id = buffer.new_reader_id();
+        println!("Initial buffer state: {:#?}", buffer);
+        println!("--- first write ---");
         buffer.drain_vec_write(&mut events(2));
+        println!("--- second write ---");
         buffer.drain_vec_write(&mut events(2));
+        println!("--- writes complete ---");
         // we wrote 0,1,0,1, if the buffer grew correctly we'll get all of these back.
         assert_eq!(
             vec![
@@ -481,7 +567,7 @@ mod tests {
 
         buffer.drain_vec_write(&mut events(4));
         // After writing 4 more events the buffer should have no reason to grow beyond four.
-        assert_eq!(buffer.data.len(), 4);
+        assert_eq!(buffer.data.num_initialized(), 4);
         assert_eq!(
             vec![
                 Test { id: 0 },
