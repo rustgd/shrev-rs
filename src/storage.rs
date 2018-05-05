@@ -2,6 +2,7 @@
 
 use std::marker::PhantomData;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
+use std::ptr;
 
 use parking_lot::Mutex;
 
@@ -70,17 +71,50 @@ impl SubAssign<usize> for CircularIndex {
     }
 }
 
-trait InsertOverwrite<T> {
-    fn write_or_push(&mut self, index: usize, elem: T);
+// TODO: custom drop logic
+struct Data<T> {
+    data: Vec<T>,
+    uninitialized: usize,
 }
 
-impl<T> InsertOverwrite<T> for Vec<T> {
-    fn write_or_push(&mut self, index: usize, elem: T) {
-        if self.len() == index {
-            self.push(elem);
+impl<T> Data<T> {
+    unsafe fn get(&self, index: usize) -> &T {
+        self.data.get_unchecked(index)
+    }
+
+    unsafe fn insert(&mut self, cursor: usize, elem: T) {
+        if self.uninitialized > 0 {
+            // There is no element stored under `cursor`
+            // -> do not drop anything!
+            ptr::write(self.data.get_unchecked_mut(cursor) as *mut T, elem);
+            self.uninitialized -= 1;
         } else {
-            self[index] = elem;
+            // We can safely drop this, it's initialized.
+            *self.data.get_unchecked_mut(cursor) = elem;
         }
+    }
+
+    /// `cursor` is the first position that gets moved to the back,
+    /// free memory will be created between `cursor - 1` and `cursor`.
+    unsafe fn grow(&mut self, cursor: usize, by: usize) {
+        assert!(by >= self.data.len());
+
+        // Calculate how many elements we need to move
+        let to_move = self.data.len() - cursor;
+
+        // Reserve space and set the new length
+        self.data.reserve_exact(by);
+        let new = self.data.len() + by;
+        self.data.set_len(new);
+
+        // Move the elements after the cursor to the end of the buffer.
+        // Since we grew the buffer at least by the old length,
+        // the elements are non-overlapping.
+        let src = self.data.as_ptr().offset(cursor as isize);
+        let dst = self.data.as_mut_ptr().offset((cursor + by) as isize);
+        ptr::copy_nonoverlapping(src, dst, to_move);
+
+        self.uninitialized += by;
     }
 }
 
@@ -184,6 +218,13 @@ impl<T: 'static> RingBuffer<T> {
                 }
             }
         };
+        // Make sure size' = 2^n * size
+        let mut size = 2 * self.last_index.size;
+        while size < grow_by {
+            size *= 2;
+        }
+
+        // Insert the additional elements
     }
 
     /// Write a single data point into the ring buffer.
