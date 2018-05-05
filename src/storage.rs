@@ -1,5 +1,6 @@
 //! Ring buffer implementation, that does immutable reads.
 
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::marker::PhantomData;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 use std::ptr;
@@ -71,13 +72,28 @@ impl SubAssign<usize> for CircularIndex {
     }
 }
 
-// TODO: custom drop logic
+#[derive(Derivative)]
+#[derivative(Debug)]
 struct Data<T> {
+    #[derivative(Debug="ignore")]
     data: Vec<T>,
     uninitialized: usize,
 }
 
 impl<T> Data<T> {
+    fn new(size: usize) -> Self {
+        let mut data = Data {
+            data: vec![],
+            uninitialized: 0,
+        };
+
+        unsafe {
+            data.grow(0, size);
+        }
+
+        data
+    }
+
     unsafe fn get(&self, index: usize) -> &T {
         self.data.get_unchecked(index)
     }
@@ -116,6 +132,22 @@ impl<T> Data<T> {
 
         self.uninitialized += by;
     }
+
+    /// Called when dropping the ring buffer.
+    unsafe fn clean(&mut self, cursor: usize) {
+        let mut cursor = CircularIndex::new(cursor, self.data.len());
+        let end = cursor - 1;
+
+        while let Some(i) = cursor.step(end) {
+            if self.uninitialized > 0 {
+                self.uninitialized -= 1;
+            } else {
+                ptr::drop_in_place(self.data.get_unchecked_mut(i) as *mut T);
+            }
+        }
+
+        self.data.set_len(0);
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -147,9 +179,7 @@ impl ReaderMeta {
                 index,
                 size: current.size,
             })
-            .min_by_key(|&index| {
-                index - current.index
-            })
+            .min_by_key(|&index| index - current.index)
     }
 }
 
@@ -157,7 +187,7 @@ impl ReaderMeta {
 #[derive(Debug)]
 pub struct RingBuffer<T> {
     last_index: CircularIndex,
-    data: Vec<T>,
+    data: Data<T>,
     nearest_reader: usize,
     meta: Mutex<ReaderMeta>,
 }
@@ -169,7 +199,7 @@ impl<T: 'static> RingBuffer<T> {
 
         RingBuffer {
             last_index: CircularIndex::at_end(size),
-            data: vec![],
+            data: Data::new(size),
             nearest_reader: !0,
             meta: Mutex::new(ReaderMeta {
                 free: vec![],
@@ -264,6 +294,12 @@ impl<T: 'static> RingBuffer<T> {
         //reader_id.num_wraps = self.num_wraps.0;
 
         iter
+    }
+}
+
+impl<T> Drop for RingBuffer<T> {
+    fn drop(&mut self) {
+        unsafe { self.data.clean(self.last_index + 1); }
     }
 }
 

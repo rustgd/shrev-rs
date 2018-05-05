@@ -5,6 +5,8 @@
 
 #![warn(missing_docs)]
 
+#[macro_use]
+extern crate derivative;
 extern crate parking_lot;
 
 pub use storage::ReaderId;
