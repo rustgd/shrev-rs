@@ -132,7 +132,7 @@ pub struct RingBuffer<T> {
     /// If `current_index` == `nearest_reader` and `needs_growth` is true,
     /// a call to `grow_internal` is necessary.
     needs_growth: bool,
-    num_wraps: Wrapping<usize>,
+//    num_wraps: Wrapping<usize>,
 }
 
 impl<T: 'static> RingBuffer<T> {
@@ -149,7 +149,7 @@ impl<T: 'static> RingBuffer<T> {
                 readers: vec![],
             }),
             needs_growth: false,
-            num_wraps: Wrapping(0),
+//            num_wraps: Wrapping(0),
         }
     }
 
@@ -178,9 +178,9 @@ impl<T: 'static> RingBuffer<T> {
         self.last_index += 1;
         self.data.write_or_push(self.last_index.index, element);
 
-        if self.last_index.index == 0 {
-            self.num_wraps += Wrapping(1);
-        }
+//        if self.last_index.index == 0 {
+//            self.num_wraps += Wrapping(1);
+//        }
     }
 
     /// Create a new reader id for this ring buffer.
