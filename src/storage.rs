@@ -184,6 +184,11 @@ impl Reader {
             x => x,
         }
     }
+
+    fn needs_shift(&self, last_index: usize, current_gen: usize) -> bool {
+        self.last_index > last_index
+            || (self.last_index == last_index && self.generation != current_gen)
+    }
 }
 
 /// The reader id is used by readers to tell the storage where the last read ended.
@@ -201,13 +206,24 @@ struct ReaderMeta {
 }
 
 impl ReaderMeta {
-    fn nearest_index(&self, last: CircularIndex, current_gen: usize) -> Option<(CircularIndex, usize)> {
+    fn nearest_index(&self, last: CircularIndex, current_gen: usize) -> Option<&Reader> {
         self.readers
             .iter()
             .filter(|reader| reader.active())
             .min_by_key(|reader| reader.distance_from(last, current_gen))
+    }
 
-        // TODO: return how many elements are left
+    fn shift(&mut self, last_index: usize, current_gen: usize, grow_by: usize) {
+        for reader in &mut self.readers {
+            let reader = reader as &mut Reader;
+            if !reader.active() {
+                continue;
+            }
+
+            if reader.needs_shift(last_index, current_gen) {
+                reader.last_index += grow_by;
+            }
+        }
     }
 }
 
@@ -257,22 +273,12 @@ impl<T: 'static> RingBuffer<T> {
     /// Does nothing if there's enough space, grows the buffer otherwise.
     pub fn ensure_additional(&mut self, num: usize) {
         let meta = self.meta.get_mut();
-        let nearest = meta.nearest_index(self.last_index, self.generation.0);
-
-        let grow_by = match nearest {
+        let grow_by = match meta.nearest_index(self.last_index, self.generation.0) {
             None => return,
-            Some((nearest, gen)) => {
-                // If the last write index points to the nearest read index, we have 0 elements
-                // left.
-                let left = match nearest - self.last_index.index {
-                    0 if gen == self.generation.0 => self.last_index.size,
-                    x => x,
-                };
+            Some(reader) => {
+                let left = reader.distance_from(self.last_index, self.generation.0);
 
-                println!(
-                    "There are {} elements left ({:?} - {:?})",
-                    left, nearest, self.last_index
-                );
+                println!("There are {} elements left", left);
 
                 if left >= num {
                     return;
@@ -302,21 +308,8 @@ impl<T: 'static> RingBuffer<T> {
         }
         self.last_index.size = size;
 
-        // TODO: shift reader indices
+        meta.shift(self.last_index.index, self.generation.0, grow_by);
         // TODO: cache available
-        for reader in &mut meta.readers {
-            let reader = reader as &mut Reader;
-            if reader.last_index == !0 {
-                continue;
-            }
-
-            // TODO does not shift correctly yet
-            // TODO but we also need to handle generations here
-            // TODO probably try to add a method to `Reader`
-            if reader.last_index > self.last_index.index {
-                reader.last_index += grow_by;
-            }
-        }
     }
 
     /// Write a single data point into the ring buffer.
@@ -572,8 +565,8 @@ mod tests {
         );
 
         buffer.drain_vec_write(&mut events(4));
-        // After writing 4 more events the buffer should have no reason to grow beyond four.
-        assert_eq!(buffer.data.num_initialized(), 4);
+        // After writing 4 more events the buffer should have no reason to grow beyond 6 (2 * 3).
+        assert_eq!(buffer.data.num_initialized(), 6);
         assert_eq!(
             vec![
                 Test { id: 0 },
