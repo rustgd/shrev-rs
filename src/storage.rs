@@ -168,6 +168,24 @@ struct Reader {
     last_index: usize,
 }
 
+impl Reader {
+    fn active(&self) -> bool {
+        self.last_index != !0
+    }
+
+    fn distance_from(&self, last: CircularIndex, current_gen: usize) -> usize {
+        let this = CircularIndex {
+            index: self.last_index,
+            size: last.size,
+        };
+
+        match this - last.index {
+            0 if self.generation == current_gen => last.size,
+            x => x,
+        }
+    }
+}
+
 /// The reader id is used by readers to tell the storage where the last read ended.
 #[derive(Debug)]
 pub struct ReaderId<T: 'static> {
@@ -186,20 +204,8 @@ impl ReaderMeta {
     fn nearest_index(&self, last: CircularIndex, current_gen: usize) -> Option<(CircularIndex, usize)> {
         self.readers
             .iter()
-            .filter(|reader| reader.last_index != !0)
-            .map(|r| {
-                (
-                    CircularIndex {
-                        index: r.last_index,
-                        size: last.size,
-                    },
-                    r.generation,
-                )
-            })
-            .min_by_key(|&(index, gen)| match index - last.index {
-                0 if gen == current_gen => last.size,
-                x => x,
-            })
+            .filter(|reader| reader.active())
+            .min_by_key(|reader| reader.distance_from(last, current_gen))
 
         // TODO: return how many elements are left
     }
@@ -304,7 +310,7 @@ impl<T: 'static> RingBuffer<T> {
                 continue;
             }
 
-            // TOOO does not shift correctly yet
+            // TODO does not shift correctly yet
             // TODO but we also need to handle generations here
             // TODO probably try to add a method to `Reader`
             if reader.last_index > self.last_index.index {
