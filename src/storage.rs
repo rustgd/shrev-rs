@@ -198,6 +198,8 @@ pub struct ReaderId<T: 'static> {
     marker: PhantomData<&'static [T]>,
 }
 
+// TODO: add Drop implementation for `ReaderId`
+
 #[derive(Debug)]
 struct ReaderMeta {
     /// Free ids
@@ -234,7 +236,7 @@ pub struct RingBuffer<T> {
     data: Data<T>,
     generation: Wrapping<usize>,
     nearest_reader: usize,
-    meta: Mutex<ReaderMeta>,
+    meta: Mutex<ReaderMeta>, // TODO: consider `UnsafeCell`
 }
 
 impl<T: 'static> RingBuffer<T> {
