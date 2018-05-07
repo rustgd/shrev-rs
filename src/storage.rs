@@ -474,6 +474,13 @@ impl<'a, T> Iterator for StorageIterator<'a, T> {
             .step(self.end)
             .map(|i| unsafe { self.data.get(i) })
     }
+
+    // Needed to fulfill contract of `ExactSizeIterator`
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+
+        (len, Some(len))
+    }
 }
 
 impl<'a, T> ExactSizeIterator for StorageIterator<'a, T> {
