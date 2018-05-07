@@ -232,6 +232,7 @@ impl ReaderMeta {
 /// Ring buffer, holding data of type `T`.
 #[derive(Debug)]
 pub struct RingBuffer<T> {
+    available: usize,
     last_index: CircularIndex,
     data: Data<T>,
     generation: Wrapping<usize>,
@@ -245,6 +246,7 @@ impl<T: 'static> RingBuffer<T> {
         assert!(size > 1);
 
         RingBuffer {
+            available: size,
             last_index: CircularIndex::at_end(size),
             data: Data::new(size),
             generation: Wrapping(0),
@@ -273,22 +275,39 @@ impl<T: 'static> RingBuffer<T> {
 
     /// Ensures that `num` elements can be inserted.
     /// Does nothing if there's enough space, grows the buffer otherwise.
+    #[inline(always)]
     pub fn ensure_additional(&mut self, num: usize) {
+        if self.available >= num {
+            return;
+        }
+
+        self.ensure_additional_slow(num);
+    }
+
+    #[inline(never)]
+    pub fn ensure_additional_slow(&mut self, num: usize) {
         let meta = self.meta.get_mut();
-        let grow_by = match meta.nearest_index(self.last_index, self.generation.0) {
-            None => return,
+        let left: usize = match meta.nearest_index(self.last_index, self.generation.0) {
+            None => {
+                self.available = self.last_index.size;
+
+                return;
+            }
             Some(reader) => {
                 let left = reader.distance_from(self.last_index, self.generation.0);
+
+                self.available = left;
 
                 println!("There are {} elements left", left);
 
                 if left >= num {
                     return;
                 } else {
-                    num - left
+                    left
                 }
             }
         };
+        let grow_by = num - left;
 
         println!(
             "Determined that a growth by {} is necessary at last index {:?}",
@@ -311,7 +330,7 @@ impl<T: 'static> RingBuffer<T> {
         self.last_index.size = size;
 
         meta.shift(self.last_index.index, self.generation.0, grow_by);
-        // TODO: cache available
+        self.available = grow_by + left;
     }
 
     /// Write a single data point into the ring buffer.
@@ -325,6 +344,7 @@ impl<T: 'static> RingBuffer<T> {
         unsafe {
             self.data.put(self.last_index + 1, element);
         }
+        self.available -= 1;
         self.last_index += 1;
         self.generation += Wrapping(1);
     }
