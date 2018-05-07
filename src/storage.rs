@@ -33,6 +33,10 @@ impl CircularIndex {
         CircularIndex::new(!0, size)
     }
 
+    fn is_magic(&self) -> bool {
+        self.index == !0
+    }
+
     fn step(&mut self, inclusive_end: usize) -> Option<usize> {
         match self.index {
             x if x == !0 => None,
@@ -311,10 +315,19 @@ impl<T: 'static> RingBuffer<T> {
     pub fn iter_write<I>(&mut self, iter: I)
     where
         I: IntoIterator<Item = T>,
+        I::IntoIter: ExactSizeIterator,
     {
-        for d in iter {
-            self.single_write(d);
+        let iter = iter.into_iter();
+        let len = iter.len();
+        self.ensure_additional(len);
+        for element in iter {
+            unsafe {
+                self.data.put(self.last_index + 1, element);
+            }
+            self.last_index += 1;
         }
+        self.available -= len;
+        self.generation += Wrapping(1);
     }
 
     /// Removes all elements from a `Vec` and pushes them to the ring buffer.
@@ -348,8 +361,6 @@ impl<T: 'static> RingBuffer<T> {
 
                 self.available = left;
 
-                println!("There are {} elements left", left);
-
                 if left >= num {
                     return;
                 } else {
@@ -358,15 +369,11 @@ impl<T: 'static> RingBuffer<T> {
             }
         };
         let grow_by = num - left;
-
-        println!(
-            "Determined that a growth by {} is necessary at last index {:?}",
-            grow_by, self.last_index
-        );
+        let min_target_size = self.last_index.size + grow_by;
 
         // Make sure size' = 2^n * size
         let mut size = 2 * self.last_index.size;
-        while size < grow_by {
+        while size < min_target_size {
             size *= 2;
         }
 
@@ -380,7 +387,7 @@ impl<T: 'static> RingBuffer<T> {
         self.last_index.size = size;
 
         meta.shift(self.last_index.index, self.generation.0, grow_by);
-        self.available = grow_by + left;
+        self.available = grow_by + left
     }
 
     fn maintain(&mut self) {
@@ -392,18 +399,9 @@ impl<T: 'static> RingBuffer<T> {
 
     /// Write a single data point into the ring buffer.
     pub fn single_write(&mut self, element: T) {
-        self.ensure_additional(1);
-        println!(
-            "Single write, last index: {:?}, putting at {}",
-            self.last_index,
-            self.last_index + 1
-        );
-        unsafe {
-            self.data.put(self.last_index + 1, element);
-        }
-        self.available -= 1;
-        self.last_index += 1;
-        self.generation += Wrapping(1);
+        use std::iter::once;
+
+        self.iter_write(once(element));
     }
 
     /// Create a new reader id for this ring buffer.
@@ -472,21 +470,18 @@ impl<'a, T> Iterator for StorageIterator<'a, T> {
     type Item = &'a T;
 
     fn next(&mut self) -> Option<&'a T> {
-        println!("index: {:?}, end: {}", self.index, self.end,);
-
-        //        if self.index != self.end {
-        //            //self.full = false;
-        //            self.index = self.index % self.wrap;
-        //            let elem = Some(&self.data[self.index]);
-        //            self.index += 1;
-        //
-        //            elem
-        //        } else {
-        //            None
-        //        }
         self.index
             .step(self.end)
             .map(|i| unsafe { self.data.get(i) })
+    }
+}
+
+impl<'a, T> ExactSizeIterator for StorageIterator<'a, T> {
+    fn len(&self) -> usize {
+        match self.index.is_magic() {
+            true => 0,
+            false => (CircularIndex::new(self.end, self.index.size) - self.index.index) + 1,
+        }
     }
 }
 
@@ -502,6 +497,21 @@ mod tests {
     #[derive(Debug, Clone, PartialEq)]
     struct Test2 {
         pub id: u32,
+    }
+
+    #[test]
+    fn test_size() {
+        let mut buffer = RingBuffer::<i32>::new(4);
+
+        buffer.single_write(55);
+
+        let mut reader = buffer.new_reader_id();
+
+        buffer.iter_write(0..16);
+        assert_eq!(buffer.read(&mut reader).len(), 16);
+
+        buffer.iter_write(0..6);
+        assert_eq!(buffer.read(&mut reader).len(), 6);
     }
 
     #[test]
@@ -605,15 +615,16 @@ mod tests {
         assert!(ReaderId::<Test>::is_send_sync());
     }
 
-    //    #[test]
-    //    fn test_reader_reuse() {
-    //        let mut buffer = RingBuffer::<Test>::new(3);
-    //        {
-    //            let _reader_id = buffer.new_reader_id();
-    //        }
-    //        let _reader_id = buffer.new_reader_id();
-    //        assert_eq!(buffer.reader_internal.len(), 1);
-    //    }
+    #[test]
+    fn test_reader_reuse() {
+        let mut buffer = RingBuffer::<Test>::new(3);
+        {
+            let _reader_id = buffer.new_reader_id();
+        }
+        let _reader_id = buffer.new_reader_id();
+        assert_eq!(_reader_id.id, 0);
+        assert_eq!(buffer.meta.get_mut().readers.len(), 1);
+    }
 
     #[test]
     fn test_prevent_excess_growth() {

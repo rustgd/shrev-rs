@@ -81,6 +81,7 @@ where
     pub fn iter_write<I>(&mut self, iter: I)
     where
         I: IntoIterator<Item = E>,
+        I::IntoIter: ExactSizeIterator,
     {
         self.storage.iter_write(iter);
     }
