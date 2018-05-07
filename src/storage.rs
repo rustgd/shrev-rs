@@ -1,11 +1,12 @@
 //! Ring buffer implementation, that does immutable reads.
 
 use std::marker::PhantomData;
+use std::num::Wrapping;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 use std::ptr;
+use std::sync::mpsc::{self, Receiver, Sender};
 
 use parking_lot::Mutex;
-use std::num::Wrapping;
 
 #[derive(Clone, Copy, Debug)]
 struct CircularIndex {
@@ -169,6 +170,10 @@ struct Reader {
 }
 
 impl Reader {
+    fn set_inactive(&mut self) {
+        self.last_index = !0;
+    }
+
     fn active(&self) -> bool {
         self.last_index != !0
     }
@@ -196,9 +201,16 @@ impl Reader {
 pub struct ReaderId<T: 'static> {
     id: usize,
     marker: PhantomData<&'static [T]>,
+    // stupid way to make this `Sync`,
+    // never actually locked
+    drop_notifier: Mutex<Sender<usize>>,
 }
 
-// TODO: add Drop implementation for `ReaderId`
+impl<T: 'static> Drop for ReaderId<T> {
+    fn drop(&mut self) {
+        let _ = self.drop_notifier.get_mut().send(self.id);
+    }
+}
 
 #[derive(Debug)]
 struct ReaderMeta {
@@ -208,6 +220,31 @@ struct ReaderMeta {
 }
 
 impl ReaderMeta {
+    fn alloc(&mut self, last_index: usize, generation: usize) -> usize {
+        match self.free.pop() {
+            Some(id) => {
+                self.readers[id].last_index = last_index;
+                self.readers[id].generation = generation;
+
+                id
+            }
+            None => {
+                let id = self.readers.len();
+                self.readers.push(Reader {
+                    generation,
+                    last_index,
+                });
+
+                id
+            }
+        }
+    }
+
+    fn remove(&mut self, id: usize) {
+        self.readers[id].set_inactive();
+        self.free.push(id);
+    }
+
     fn nearest_index(&self, last: CircularIndex, current_gen: usize) -> Option<&Reader> {
         self.readers
             .iter()
@@ -235,6 +272,12 @@ pub struct RingBuffer<T> {
     available: usize,
     last_index: CircularIndex,
     data: Data<T>,
+    // stupid way to make this `Sync`,
+    // never actually locked
+    free_rx: Mutex<Receiver<usize>>,
+    // stupid way to make this `Sync`,
+    // never actually locked
+    free_tx: Mutex<Sender<usize>>,
     generation: Wrapping<usize>,
     nearest_reader: usize,
     meta: Mutex<ReaderMeta>, // TODO: consider `UnsafeCell`
@@ -245,10 +288,16 @@ impl<T: 'static> RingBuffer<T> {
     pub fn new(size: usize) -> Self {
         assert!(size > 1);
 
+        let (free_tx, free_rx) = mpsc::channel();
+        let free_tx = Mutex::new(free_tx);
+        let free_rx = Mutex::new(free_rx);
+
         RingBuffer {
             available: size,
             last_index: CircularIndex::at_end(size),
             data: Data::new(size),
+            free_rx,
+            free_tx,
             generation: Wrapping(0),
             nearest_reader: !0,
             meta: Mutex::new(ReaderMeta {
@@ -285,7 +334,8 @@ impl<T: 'static> RingBuffer<T> {
     }
 
     #[inline(never)]
-    pub fn ensure_additional_slow(&mut self, num: usize) {
+    fn ensure_additional_slow(&mut self, num: usize) {
+        self.maintain();
         let meta = self.meta.get_mut();
         let left: usize = match meta.nearest_index(self.last_index, self.generation.0) {
             None => {
@@ -333,6 +383,13 @@ impl<T: 'static> RingBuffer<T> {
         self.available = grow_by + left;
     }
 
+    fn maintain(&mut self) {
+        let meta = self.meta.get_mut();
+        while let Ok(id) = self.free_rx.get_mut().try_recv() {
+            meta.remove(id);
+        }
+    }
+
     /// Write a single data point into the ring buffer.
     pub fn single_write(&mut self, element: T) {
         self.ensure_additional(1);
@@ -351,22 +408,15 @@ impl<T: 'static> RingBuffer<T> {
 
     /// Create a new reader id for this ring buffer.
     pub fn new_reader_id(&mut self) -> ReaderId<T> {
-        let meta = self.meta.get_mut();
+        self.maintain();
         let last_index = self.last_index.index;
         let generation = self.generation.0;
-        let id = meta.free.pop().unwrap_or_else(|| {
-            let id = meta.readers.len();
-            meta.readers.push(Reader {
-                generation,
-                last_index,
-            });
-
-            id
-        });
+        let id = self.meta.get_mut().alloc(last_index, generation);
 
         ReaderId {
             id,
             marker: PhantomData,
+            drop_notifier: Mutex::new(self.free_tx.get_mut().clone()),
         }
     }
 
