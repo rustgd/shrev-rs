@@ -319,15 +319,17 @@ impl<T: 'static> RingBuffer<T> {
     {
         let iter = iter.into_iter();
         let len = iter.len();
-        self.ensure_additional(len);
-        for element in iter {
-            unsafe {
-                self.data.put(self.last_index + 1, element);
+        if len > 0 {
+            self.ensure_additional(len);
+            for element in iter {
+                unsafe {
+                    self.data.put(self.last_index + 1, element);
+                }
+                self.last_index += 1;
             }
-            self.last_index += 1;
+            self.available -= len;
+            self.generation += Wrapping(1);
         }
-        self.available -= len;
-        self.generation += Wrapping(1);
     }
 
     /// Removes all elements from a `Vec` and pushes them to the ring buffer.
@@ -678,6 +680,15 @@ mod tests {
             vec![Test { id: 0 }, Test { id: 1 }],
             data.cloned().collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn iter_write_empty() {
+        let mut buffer = RingBuffer::<Test>::new(10);
+        let mut reader_id = buffer.new_reader_id();
+        buffer.iter_write(Vec::new());
+        let mut data = buffer.read(&mut reader_id);
+        assert_eq!(None, data.next());
     }
 
     fn events(n: u32) -> Vec<Test> {
