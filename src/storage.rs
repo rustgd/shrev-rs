@@ -426,7 +426,8 @@ impl<T: 'static> RingBuffer<T> {
         let (last_read_index, gen) = {
             let mut meta = self.meta.lock();
 
-            let reader = &mut meta.readers[reader_id.id];
+            let reader = &mut meta.readers.get_mut(reader_id.id)
+                .unwrap_or_else(|| panic!("ReaderId not registered: {}", reader_id.id));
             let old = reader.last_index;
             reader.last_index = self.last_index.index;
             let old_gen = reader.generation;
