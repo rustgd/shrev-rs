@@ -1,3 +1,5 @@
+# `shrev`
+
 [![crates.io badge](https://img.shields.io/crates/v/shrev.svg)](https://crates.io/crates/shrev) [![docs badge](https://docs.rs/shrev/badge.svg)](https://docs.rs/shrev)
 
 A pull based event channel, with events stored in a ring buffer,
@@ -51,3 +53,12 @@ fn main() {
     );
 }
 ```
+
+## License
+
+`shrev-rs` is free and open source software distributed under the terms of both
+the MIT License and the Apache License 2.0.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall
+be dual licensed as above, without any additional terms or conditions.
