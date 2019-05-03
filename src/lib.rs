@@ -98,8 +98,12 @@ where
         self.storage.single_write(event);
     }
 
-    /// Read any events that have been written to storage since the readers last
-    /// read.
+    /// Read any events that have been written to storage since the last read with `reader_id`.
+    ///
+    /// Note that this will advance the position of the reader regardless of what you do with the
+    /// iterator. In other words, calling `read` without iterating the result won't preserve the
+    /// events returned. You need to iterate all the events as soon as you got them from this
+    /// method. This behavior is equivalent to e.g. `Vec::drain`.
     pub fn read(&self, reader_id: &mut ReaderId<E>) -> EventIterator<E> {
         self.storage.read(reader_id)
     }
