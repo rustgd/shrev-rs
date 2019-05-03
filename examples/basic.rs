@@ -10,33 +10,22 @@ pub struct TestEvent {
 fn main() {
     let mut channel = EventChannel::new();
 
-    channel.drain_vec_write(&mut vec![TestEvent { data: 1 }, TestEvent { data: 2 }]);
+    let mut reader1 = channel.register_reader();
+    let mut reader2 = channel.register_reader();
 
-    let mut reader_id = channel.register_reader();
+    channel.single_write(TestEvent { data: 1 });
 
-    // Should be empty, because reader was created after the write
-    assert_eq!(
-        Vec::<TestEvent>::default(),
-        channel.read(&mut reader_id).cloned().collect::<Vec<_>>()
-    );
+    // Prints one event
+    println!("reader1 read: {:#?}", collect(channel.read(&mut reader1)));
+    channel.single_write(TestEvent { data: 32 });
 
-    // Should have data, as a second write was done
-    channel.single_write(TestEvent { data: 5 });
+    // Prints two events
+    println!("reader2 read: {:#?}", collect(channel.read(&mut reader2)));
+    // Prints no events
+    println!("reader2 read: {:#?}", collect(channel.read(&mut reader2)));
+}
 
-    assert_eq!(
-        vec![TestEvent { data: 5 }],
-        channel.read(&mut reader_id).cloned().collect::<Vec<_>>()
-    );
-
-    // We can also just send in an iterator.
-    channel.iter_write(
-        [TestEvent { data: 8 }, TestEvent { data: 9 }]
-            .iter()
-            .cloned(),
-    );
-
-    assert_eq!(
-        vec![TestEvent { data: 8 }, TestEvent { data: 9 }],
-        channel.read(&mut reader_id).cloned().collect::<Vec<_>>()
-    );
+/// Collects an iterator to a `Vec`
+fn collect<'a>(events: impl Iterator<Item = &'a TestEvent>) -> Vec<&'a TestEvent> {
+    events.collect()
 }

@@ -52,6 +52,14 @@ where
         }
     }
 
+    /// Returns `true` if any reader would observe an additional event.
+    ///
+    /// This can be used to skip calls to `iter_write` in case the event construction
+    /// is expensive.
+    pub fn would_write(&mut self) -> bool {
+        self.storage.would_write()
+    }
+
     /// Register a reader.
     ///
     /// To be able to read events, a reader id is required. This is because
