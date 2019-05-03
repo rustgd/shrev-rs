@@ -1,12 +1,17 @@
 //! Ring buffer implementation, that does immutable reads.
 
-use std::marker::PhantomData;
-use std::num::Wrapping;
-use std::ops::{Add, AddAssign, Sub, SubAssign};
-use std::ptr;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::{
+    cell::UnsafeCell,
+    fmt,
+    marker::PhantomData,
+    num::Wrapping,
+    ops::{Add, AddAssign, Sub, SubAssign},
+    ptr,
+    sync::mpsc::{self, Receiver, Sender},
+};
 
-use parking_lot::Mutex;
+use crate::util::{InstanceId, NoSharedAccess, Reference};
+use std::fmt::Debug;
 
 #[derive(Clone, Copy, Debug)]
 struct CircularIndex {
@@ -84,10 +89,7 @@ impl SubAssign<usize> for CircularIndex {
     }
 }
 
-#[derive(Derivative)]
-#[derivative(Debug)]
 struct Data<T> {
-    #[derivative(Debug = "ignore")]
     data: Vec<T>,
     uninitialized: usize,
 }
@@ -102,6 +104,8 @@ impl<T> Data<T> {
         unsafe {
             data.grow(0, size);
         }
+
+        debug_assert_eq!(data.uninitialized, size, "Bug in shrev");
 
         data
     }
@@ -161,9 +165,17 @@ impl<T> Data<T> {
         self.data.set_len(0);
     }
 
-    #[cfg(test)]
     fn num_initialized(&self) -> usize {
         self.data.len() - self.uninitialized
+    }
+}
+
+impl<T: Debug> Debug for Data<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Data")
+            .field("num_initialized", &self.num_initialized())
+            .field("num_uninitialized", &self.uninitialized)
+            .finish()
     }
 }
 
@@ -200,14 +212,25 @@ impl Reader {
     }
 }
 
-/// The reader id is used by readers to tell the storage where the last read ended.
+/// A reader ID which represents a subscription to the events pushed to the
+/// `EventChannel`.
+///
+/// For each reader ID, the last read event is tracked; this way, the buffer
+/// gets grown whenever it would overwrite an event which was not yet observed
+/// by every `ReaderId`.
+///
+/// Dropping a `ReaderId` effectively cancels the subscription to those events.
+///
+/// Note that as long as a `ReaderId` exists, it is crucial to use it to read
+/// the events; otherwise the buffer of the `EventChannel` **will** keep
+/// growing.
 #[derive(Debug)]
 pub struct ReaderId<T: 'static> {
     id: usize,
     marker: PhantomData<&'static [T]>,
-    // stupid way to make this `Sync`,
-    // never actually locked
-    drop_notifier: Mutex<Sender<usize>>,
+    reference: Reference,
+    // stupid way to make this `Sync`
+    drop_notifier: NoSharedAccess<Sender<usize>>,
 }
 
 impl<T: 'static> Drop for ReaderId<T> {
@@ -216,28 +239,40 @@ impl<T: 'static> Drop for ReaderId<T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Default)]
 struct ReaderMeta {
     /// Free ids
     free: Vec<usize>,
-    readers: Vec<Reader>,
+    readers: Vec<UnsafeCell<Reader>>,
 }
 
 impl ReaderMeta {
+    fn new() -> Self {
+        Default::default()
+    }
+
+    fn reader<T>(&self, id: &mut ReaderId<T>) -> Option<&mut Reader> {
+        self.readers.get(id.id).map(|r| unsafe { &mut *r.get() })
+    }
+
+    fn reader_exclusive(&mut self, id: usize) -> &mut Reader {
+        unsafe { &mut *self.readers[id].get() }
+    }
+
     fn alloc(&mut self, last_index: usize, generation: usize) -> usize {
         match self.free.pop() {
             Some(id) => {
-                self.readers[id].last_index = last_index;
-                self.readers[id].generation = generation;
+                self.reader_exclusive(id).last_index = last_index;
+                self.reader_exclusive(id).generation = generation;
 
                 id
             }
             None => {
                 let id = self.readers.len();
-                self.readers.push(Reader {
+                self.readers.push(UnsafeCell::new(Reader {
                     generation,
                     last_index,
-                });
+                }));
 
                 id
             }
@@ -245,20 +280,22 @@ impl ReaderMeta {
     }
 
     fn remove(&mut self, id: usize) {
-        self.readers[id].set_inactive();
+        self.reader_exclusive(id).set_inactive();
         self.free.push(id);
     }
 
-    fn nearest_index(&self, last: CircularIndex, current_gen: usize) -> Option<&Reader> {
+    // This needs to be mutable since `readers` might be borrowed in `reader`!
+    fn nearest_index(&mut self, last: CircularIndex, current_gen: usize) -> Option<&Reader> {
         self.readers
             .iter()
+            .map(|reader| unsafe { &*reader.get() })
             .filter(|reader| reader.active())
             .min_by_key(|reader| reader.distance_from(last, current_gen))
     }
 
     fn shift(&mut self, last_index: usize, current_gen: usize, grow_by: usize) {
         for reader in &mut self.readers {
-            let reader = reader as &mut Reader;
+            let reader = unsafe { &mut *reader.get() } as &mut Reader;
             if !reader.active() {
                 continue;
             }
@@ -270,21 +307,19 @@ impl ReaderMeta {
     }
 }
 
+unsafe impl Send for ReaderMeta {}
+unsafe impl Sync for ReaderMeta {}
+
 /// Ring buffer, holding data of type `T`.
-#[derive(Debug)]
 pub struct RingBuffer<T> {
     available: usize,
     last_index: CircularIndex,
     data: Data<T>,
-    // stupid way to make this `Sync`,
-    // never actually locked
-    free_rx: Mutex<Receiver<usize>>,
-    // stupid way to make this `Sync`,
-    // never actually locked
-    free_tx: Mutex<Sender<usize>>,
+    free_rx: NoSharedAccess<Receiver<usize>>,
+    free_tx: NoSharedAccess<Sender<usize>>,
     generation: Wrapping<usize>,
-    nearest_reader: usize,
-    meta: Mutex<ReaderMeta>, // TODO: consider `UnsafeCell`
+    instance_id: InstanceId,
+    meta: ReaderMeta,
 }
 
 impl<T: 'static> RingBuffer<T> {
@@ -293,8 +328,8 @@ impl<T: 'static> RingBuffer<T> {
         assert!(size > 1);
 
         let (free_tx, free_rx) = mpsc::channel();
-        let free_tx = Mutex::new(free_tx);
-        let free_rx = Mutex::new(free_rx);
+        let free_tx = NoSharedAccess::new(free_tx);
+        let free_rx = NoSharedAccess::new(free_rx);
 
         RingBuffer {
             available: size,
@@ -303,11 +338,8 @@ impl<T: 'static> RingBuffer<T> {
             free_rx,
             free_tx,
             generation: Wrapping(0),
-            nearest_reader: !0,
-            meta: Mutex::new(ReaderMeta {
-                free: vec![],
-                readers: vec![],
-            }),
+            instance_id: InstanceId::new("`ReaderId` was not allocated by this `EventChannel`"),
+            meta: ReaderMeta::new(),
         }
     }
 
@@ -351,8 +383,7 @@ impl<T: 'static> RingBuffer<T> {
     #[inline(never)]
     fn ensure_additional_slow(&mut self, num: usize) {
         self.maintain();
-        let meta = self.meta.get_mut();
-        let left: usize = match meta.nearest_index(self.last_index, self.generation.0) {
+        let left: usize = match self.meta.nearest_index(self.last_index, self.generation.0) {
             None => {
                 self.available = self.last_index.size;
 
@@ -388,14 +419,14 @@ impl<T: 'static> RingBuffer<T> {
         }
         self.last_index.size = size;
 
-        meta.shift(self.last_index.index, self.generation.0, grow_by);
+        self.meta
+            .shift(self.last_index.index, self.generation.0, grow_by);
         self.available = grow_by + left
     }
 
     fn maintain(&mut self) {
-        let meta = self.meta.get_mut();
         while let Ok(id) = self.free_rx.get_mut().try_recv() {
-            meta.remove(id);
+            self.meta.remove(id);
         }
     }
 
@@ -411,26 +442,33 @@ impl<T: 'static> RingBuffer<T> {
         self.maintain();
         let last_index = self.last_index.index;
         let generation = self.generation.0;
-        let id = self.meta.get_mut().alloc(last_index, generation);
+        let id = self.meta.alloc(last_index, generation);
 
         ReaderId {
             id,
             marker: PhantomData,
-            drop_notifier: Mutex::new(self.free_tx.get_mut().clone()),
+            reference: self.instance_id.reference(),
+            drop_notifier: NoSharedAccess::new(self.free_tx.get_mut().clone()),
         }
     }
 
-    /// Read data from the ring buffer, starting where the last read ended, and up to where the last
-    /// element was written.
+    /// Read data from the ring buffer, starting where the last read ended, and
+    /// up to where the last element was written.
     pub fn read(&self, reader_id: &mut ReaderId<T>) -> StorageIterator<T> {
-        let (last_read_index, gen) = {
-            let mut meta = self.meta.lock();
+        // Check if `reader_id` was actually created for this buffer.
+        // This is very important as `reader_id` is a token allowing memory access,
+        // and without this check a race could be caused by duplicate IDs.
+        self.instance_id.assert_eq(&reader_id.reference);
 
-            let reader = &mut meta.readers.get_mut(reader_id.id)
-                .unwrap_or_else(|| panic!("ReaderId not registered: {}\n\
-                                           This usually means that this ReaderId \
-                                           was created by a different storage",
-                                           reader_id.id));
+        let (last_read_index, gen) = {
+            let reader = self.meta.reader(reader_id).unwrap_or_else(|| {
+                panic!(
+                    "ReaderId not registered: {}\n\
+                     This usually means that this ReaderId \
+                     was created by a different storage",
+                    reader_id.id
+                )
+            });
             let old = reader.last_index;
             reader.last_index = self.last_index.index;
             let old_gen = reader.generation;
@@ -452,6 +490,17 @@ impl<T: 'static> RingBuffer<T> {
         };
 
         iter
+    }
+}
+
+impl<T: Debug> Debug for RingBuffer<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("RingBuffer")
+            .field("available", &self.available)
+            .field("instance_id", &self.instance_id)
+            .field("data", &self.data)
+            .field("last_index", &self.last_index)
+            .finish()
     }
 }
 
@@ -636,7 +685,7 @@ mod tests {
         }
         let _reader_id = buffer.new_reader_id();
         assert_eq!(_reader_id.id, 0);
-        assert_eq!(buffer.meta.get_mut().readers.len(), 1);
+        assert_eq!(buffer.meta.readers.len(), 1);
     }
 
     #[test]
@@ -661,7 +710,8 @@ mod tests {
         );
 
         buffer.drain_vec_write(&mut events(4));
-        // After writing 4 more events the buffer should have no reason to grow beyond 6 (2 * 3).
+        // After writing 4 more events the buffer should have no reason to grow beyond 6
+        // (2 * 3).
         assert_eq!(buffer.data.num_initialized(), 6);
         assert_eq!(
             vec![
