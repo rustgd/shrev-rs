@@ -16,11 +16,16 @@ fn main() {
     channel.single_write(TestEvent { data: 1 });
 
     // Prints one event
-    println!("reader1 read: {:#?}", channel.read(&mut reader1));
+    println!("reader1 read: {:#?}", collect(channel.read(&mut reader1)));
     channel.single_write(TestEvent { data: 32 });
 
     // Prints two events
-    println!("reader2 read: {:#?}", channel.read(&mut reader2));
+    println!("reader2 read: {:#?}", collect(channel.read(&mut reader2)));
     // Prints no events
-    println!("reader2 read: {:#?}", channel.read(&mut reader2));
+    println!("reader2 read: {:#?}", collect(channel.read(&mut reader2)));
+}
+
+/// Collects an iterator to a `Vec`
+fn collect(events: impl Iterator<Item = TestEvent>) -> Vec<TestEvent> {
+    events.collect()
 }
