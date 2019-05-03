@@ -22,6 +22,7 @@ impl<T> Event for T where T: Send + Sync + 'static {}
 const DEFAULT_CAPACITY: usize = 64;
 
 /// Event channel
+#[derive(Debug)]
 pub struct EventChannel<E> {
     storage: RingBuffer<E>,
 }
@@ -31,7 +32,7 @@ where
     E: Event,
 {
     fn default() -> Self {
-        EventChannel::new()
+        EventChannel::with_capacity(DEFAULT_CAPACITY)
     }
 }
 
@@ -41,7 +42,7 @@ where
 {
     /// Create a new EventChannel with a default size of 50
     pub fn new() -> Self {
-        Self::with_capacity(DEFAULT_CAPACITY)
+        Default::default()
     }
 
     /// Create a new EventChannel with the given starting capacity.

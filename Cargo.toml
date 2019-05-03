@@ -15,5 +15,3 @@ categories = ["game-engines"]
 keywords = ["ecs", "specs", "events"]
 
 [dependencies]
-derivative = "1"
-parking_lot = ">=0.1.1, <0.8"
