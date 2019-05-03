@@ -26,6 +26,6 @@ fn main() {
 }
 
 /// Collects an iterator to a `Vec`
-fn collect(events: impl Iterator<Item = TestEvent>) -> Vec<TestEvent> {
+fn collect<'a>(events: impl Iterator<Item = &'a TestEvent>) -> Vec<&'a TestEvent> {
     events.collect()
 }
