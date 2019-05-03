@@ -259,6 +259,10 @@ impl ReaderMeta {
         unsafe { &mut *self.readers[id].get() }
     }
 
+    fn has_reader(&mut self) -> bool {
+        self.readers.iter().map(|r| unsafe { &mut *r.get() }).any(|r| r.active())
+    }
+
     fn alloc(&mut self, last_index: usize, generation: usize) -> usize {
         match self.free.pop() {
             Some(id) => {
@@ -367,6 +371,13 @@ impl<T: 'static> RingBuffer<T> {
     /// Removes all elements from a `Vec` and pushes them to the ring buffer.
     pub fn drain_vec_write(&mut self, data: &mut Vec<T>) {
         self.iter_write(data.drain(..));
+    }
+
+    // Checks if any reader would observe an additional event.
+    pub fn would_write(&mut self) -> bool {
+        self.maintain();
+
+        self.meta.has_reader()
     }
 
     /// Ensures that `num` elements can be inserted.
