@@ -5,27 +5,19 @@
 
 #![warn(missing_docs)]
 
-#[macro_use]
-extern crate derivative;
-extern crate parking_lot;
+pub use crate::storage::{ReaderId, StorageIterator as EventIterator};
 
-pub use storage::ReaderId;
-pub use storage::StorageIterator as EventIterator;
-
-use storage::RingBuffer;
+use crate::storage::RingBuffer;
 
 mod storage;
+mod util;
 
 /// Marker trait for data to use with the EventChannel.
 ///
 /// Has an implementation for all types where its bounds are satisfied.
 pub trait Event: Send + Sync + 'static {}
 
-impl<T> Event for T
-where
-    T: Send + Sync + 'static,
-{
-}
+impl<T> Event for T where T: Send + Sync + 'static {}
 
 const DEFAULT_CAPACITY: usize = 64;
 
@@ -61,9 +53,10 @@ where
 
     /// Register a reader.
     ///
-    /// To be able to read events, a reader id is required. This is because otherwise the channel
-    /// wouldn't know where in the ringbuffer the reader has read to earlier. This information is
-    /// stored in the reader id.
+    /// To be able to read events, a reader id is required. This is because
+    /// otherwise the channel wouldn't know where in the ringbuffer the
+    /// reader has read to earlier. This information is stored in the reader
+    /// id.
     pub fn register_reader(&mut self) -> ReaderId<E> {
         self.storage.new_reader_id()
     }
@@ -96,7 +89,8 @@ where
         self.storage.single_write(event);
     }
 
-    /// Read any events that have been written to storage since the readers last read.
+    /// Read any events that have been written to storage since the readers last
+    /// read.
     pub fn read(&self, reader_id: &mut ReaderId<E>) -> EventIterator<E> {
         self.storage.read(reader_id)
     }
@@ -179,8 +173,8 @@ mod tests {
         );
     }
 
-    // There was previously a case where the tests worked but the example didn't, so the example
-    // was added as a test case.
+    // There was previously a case where the tests worked but the example didn't, so
+    // the example was added as a test case.
     #[test]
     fn test_example() {
         let mut channel = EventChannel::new();
