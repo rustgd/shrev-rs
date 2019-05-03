@@ -105,13 +105,9 @@ impl<T> Data<T> {
             data.grow(0, size);
         }
 
-        data
-    }
+        debug_assert_eq!(data.uninitialized, size, "Bug in shrev");
 
-    fn debug_data(&self) -> Vec<&T> {
-        (0..self.num_initialized())
-            .map(|i| unsafe { self.get(i) })
-            .collect()
+        data
     }
 
     unsafe fn get(&self, index: usize) -> &T {
@@ -125,7 +121,6 @@ impl<T> Data<T> {
             ptr::write(self.data.get_unchecked_mut(cursor) as *mut T, elem);
             self.uninitialized -= 1;
         } else {
-            // TODO: is this really correct? TEST!
             // We can safely drop this, it's initialized.
             *self.data.get_unchecked_mut(cursor) = elem;
         }
@@ -178,7 +173,8 @@ impl<T> Data<T> {
 impl<T: Debug> Debug for Data<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Data")
-            .field("data", &self.debug_data())
+            .field("num_initialized", &self.num_initialized())
+            .field("num_uninitialized", &self.uninitialized)
             .finish()
     }
 }

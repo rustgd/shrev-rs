@@ -1,4 +1,3 @@
-
 use shrev::*;
 
 fn is_sync<T: Sync>() {}
