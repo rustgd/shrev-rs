@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use shrev::*;
 
 type EventChannel = shrev::EventChannel<i32>;
