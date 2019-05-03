@@ -23,6 +23,7 @@ script:
 - |
   travis-cargo build &&
   travis-cargo test -- --all &&
+  travis-cargo --only nightly test -- --all -Z minimal-versions &&
   travis-cargo bench &&
   travis-cargo --only stable doc
 cache: cargo
