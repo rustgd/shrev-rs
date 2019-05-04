@@ -260,7 +260,10 @@ impl ReaderMeta {
     }
 
     fn has_reader(&mut self) -> bool {
-        self.readers.iter().map(|r| unsafe { &mut *r.get() }).any(|r| r.active())
+        self.readers
+            .iter()
+            .map(|r| unsafe { &mut *r.get() })
+            .any(|r| r.active())
     }
 
     fn alloc(&mut self, last_index: usize, generation: usize) -> usize {
