@@ -21,7 +21,72 @@ impl<T> Event for T where T: Send + Sync + 'static {}
 
 const DEFAULT_CAPACITY: usize = 64;
 
-/// Event channel
+/// The `EventChannel`, which is the central component of `shrev`.
+///
+/// ## How it works
+///
+/// This channel has a ring buffer, which it allocates with an initial capacity.
+/// Once allocated, it writes new events into the buffer, wrapping around when
+/// it reaches the "end" of the buffer.
+///
+/// However, before an event gets written into the buffer, the channel checks if
+/// all readers have read the event which is about to be overwritten. In case
+/// the answer is "No", it will grow the buffer so no events get overwritten.
+///
+/// Readers are stores in the `EventChannel` itself, because we need to access
+/// their position in a write, so we can check what's described above. Thus, you
+/// only get a `ReaderId` as a handle.
+///
+/// ## What do I use it for?
+///
+/// The `EventChannel` is basically a single producer, multiple consumer
+/// ("SPMC") channel. That is, a `write` to the channel requires mutable access,
+/// while reading can be done with just an immutable reference. All readers
+/// (consumers) will always get all the events since their last read (or when
+/// they were created, if there was no read yet).
+///
+/// ## Examples
+///
+/// ```
+/// use std::mem::drop;
+///
+/// use shrev::{EventChannel, ReaderId};
+///
+/// // The buffer will initially be 16 events big
+/// let mut channel = EventChannel::with_capacity(16);
+///
+/// // This is basically with no effect; no reader can possibly observe it
+/// channel.single_write(42i32);
+///
+/// let mut first_reader = channel.register_reader();
+///
+/// // What's interesting here is that we don't check the readers' positions _yet_
+/// // That is because the size of 16 allows us to write 16 events before we need to perform
+/// // such a check.
+/// channel.iter_write(0..4);
+///
+/// // Now, we read 4 events (0, 1, 2, 3)
+/// // Notice how we borrow the ID mutably; this is because logically we modify the reader,
+/// // and we shall not read with the same ID concurrently
+/// let _events = channel.read(&mut first_reader);
+///
+/// // Let's create a second reader; this one will not receive any of the previous events
+/// let mut second_reader = channel.register_reader();
+///
+/// // No event returned
+/// let _events = channel.read(&mut second_reader);
+///
+/// channel.iter_write(4..6);
+///
+/// // Both now get the same two events
+/// let _events = channel.read(&mut first_reader);
+/// let _events = channel.read(&mut second_reader);
+///
+/// // We no longer need our second reader, so we drop it
+/// // This is important, since otherwise the buffer would keep growing if our reader doesn't read
+/// // any events
+/// drop(second_reader);
+/// ```
 #[derive(Debug)]
 pub struct EventChannel<E> {
     storage: RingBuffer<E>,
@@ -40,12 +105,12 @@ impl<E> EventChannel<E>
 where
     E: Event,
 {
-    /// Create a new EventChannel with a default size of 50
+    /// Create a new `EventChannel` with a default size of 64.
     pub fn new() -> Self {
         Default::default()
     }
 
-    /// Create a new EventChannel with the given starting capacity.
+    /// Create a new `EventChannel` with the given starting capacity.
     pub fn with_capacity(size: usize) -> Self {
         Self {
             storage: RingBuffer::new(size),
@@ -54,18 +119,24 @@ where
 
     /// Returns `true` if any reader would observe an additional event.
     ///
-    /// This can be used to skip calls to `iter_write` in case the event construction
-    /// is expensive.
+    /// This can be used to skip calls to `iter_write` in case the event
+    /// construction is expensive.
     pub fn would_write(&mut self) -> bool {
         self.storage.would_write()
     }
 
-    /// Register a reader.
+    /// Register a new reader.
     ///
     /// To be able to read events, a reader id is required. This is because
-    /// otherwise the channel wouldn't know where in the ringbuffer the
-    /// reader has read to earlier. This information is stored in the reader
-    /// id.
+    /// otherwise the channel wouldn't know where in the ring buffer the
+    /// reader has read to earlier. This information is stored in the channel,
+    /// associated with the returned `ReaderId`.
+    ///
+    /// A newly created `ReaderId` will only receive the events written after
+    /// its creation.
+    ///
+    /// Once you no longer perform `read`s with your `ReaderId`, you should
+    /// drop it so the channel can safely overwrite events not read by it.
     pub fn register_reader(&mut self) -> ReaderId<E> {
         self.storage.new_reader_id()
     }
@@ -98,11 +169,14 @@ where
         self.storage.single_write(event);
     }
 
-    /// Read any events that have been written to storage since the last read with `reader_id`.
+    /// Read any events that have been written to storage since the last read
+    /// with `reader_id` (or the creation of the `ReaderId`, if it hasn't read
+    /// yet).
     ///
-    /// Note that this will advance the position of the reader regardless of what you do with the
-    /// iterator. In other words, calling `read` without iterating the result won't preserve the
-    /// events returned. You need to iterate all the events as soon as you got them from this
+    /// Note that this will advance the position of the reader regardless of
+    /// what you do with the iterator. In other words, calling `read`
+    /// without iterating the result won't preserve the events returned. You
+    /// need to iterate all the events as soon as you got them from this
     /// method. This behavior is equivalent to e.g. `Vec::drain`.
     pub fn read(&self, reader_id: &mut ReaderId<E>) -> EventIterator<E> {
         self.storage.read(reader_id)
