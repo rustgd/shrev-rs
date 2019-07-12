@@ -224,13 +224,23 @@ impl Reader {
 /// Note that as long as a `ReaderId` exists, it is crucial to use it to read
 /// the events; otherwise the buffer of the `EventChannel` **will** keep
 /// growing.
-#[derive(Debug)]
 pub struct ReaderId<T: 'static> {
     id: usize,
     marker: PhantomData<&'static [T]>,
     reference: Reference,
     // stupid way to make this `Sync`
     drop_notifier: NoSharedAccess<Sender<usize>>,
+}
+
+impl<T: 'static> fmt::Debug for ReaderId<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReaderId")
+            .field("id", &self.id)
+            .field("marker", &self.marker)
+            .field("reference", &self.reference)
+            .field("drop_notifier", &self.drop_notifier)
+            .finish()
+    }
 }
 
 impl<T: 'static> Drop for ReaderId<T> {
