@@ -59,6 +59,28 @@ impl CircularIndex {
             }
         }
     }
+
+    fn step_back(&mut self, inclusive_end: &mut usize) -> Option<usize> {
+        match self.index {
+            x if x == !0 => None,
+            x if x == *inclusive_end => {
+                let r = Some(x);
+                self.index = !0;
+
+                r
+            }
+            _ => {
+                let r = Some(*inclusive_end);
+                if *inclusive_end == 0 {
+                    *inclusive_end = self.size;
+                }
+
+                *inclusive_end -= 1;
+
+                r
+            }
+        }
+    }
 }
 
 impl Add<usize> for CircularIndex {
@@ -562,6 +584,14 @@ impl<'a, T> Iterator for StorageIterator<'a, T> {
     }
 }
 
+impl<'a, T> DoubleEndedIterator for StorageIterator<'a, T> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.index
+            .step_back(&mut self.end)
+            .map(|i| unsafe { self.data.get(i) })
+    }
+}
+
 impl<'a, T> ExactSizeIterator for StorageIterator<'a, T> {
     fn len(&self) -> usize {
         match self.index.is_magic() {
@@ -640,12 +670,35 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_read_rev() {
+        let mut buffer = RingBuffer::<Test>::new(10);
+        let mut reader_id = buffer.new_reader_id();
+        let data = buffer.read(&mut reader_id);
+        assert_eq!(
+            Vec::<Test>::default(),
+            data.rev().cloned().collect::<Vec<_>>()
+        )
+    }
+
+    #[test]
     fn test_empty_read_write_before_id() {
         let mut buffer = RingBuffer::<Test>::new(10);
         buffer.drain_vec_write(&mut events(2));
         let mut reader_id = buffer.new_reader_id();
         let data = buffer.read(&mut reader_id);
         assert_eq!(Vec::<Test>::default(), data.cloned().collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn test_empty_read_write_before_id_rev() {
+        let mut buffer = RingBuffer::<Test>::new(10);
+        buffer.drain_vec_write(&mut events(2));
+        let mut reader_id = buffer.new_reader_id();
+        let data = buffer.read(&mut reader_id);
+        assert_eq!(
+            Vec::<Test>::default(),
+            data.rev().cloned().collect::<Vec<_>>()
+        )
     }
 
     #[test]
@@ -661,6 +714,99 @@ mod tests {
         assert_eq!(
             Vec::<Test>::new(),
             buffer.read(&mut reader_id).cloned().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_read_rev() {
+        let mut buffer = RingBuffer::<Test>::new(10);
+        let mut reader_id = buffer.new_reader_id();
+        buffer.drain_vec_write(&mut events(2));
+        assert_eq!(
+            vec![Test { id: 1 }, Test { id: 0 }],
+            buffer
+                .read(&mut reader_id)
+                .rev()
+                .cloned()
+                .collect::<Vec<_>>()
+        );
+
+        assert_eq!(
+            Vec::<Test>::new(),
+            buffer
+                .read(&mut reader_id)
+                .rev()
+                .cloned()
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_read_wrap_around_rev() {
+        let mut buffer = RingBuffer::<Test>::new(4);
+        let mut reader_id = buffer.new_reader_id();
+        buffer.drain_vec_write(&mut events(2));
+        // buffer should now be [--> 0, 1, -, -]
+        assert_eq!(
+            vec![Test { id: 1 }, Test { id: 0 }],
+            buffer
+                .read(&mut reader_id)
+                .rev()
+                .cloned()
+                .collect::<Vec<_>>()
+        );
+        buffer.drain_vec_write(&mut events(3));
+        // buffer should now be [2, 1, --> 0, 1]
+        assert_eq!(
+            vec![Test { id: 2 }, Test { id: 1 }, Test { id: 0 }],
+            buffer
+                .read(&mut reader_id)
+                .rev()
+                .cloned()
+                .collect::<Vec<_>>()
+        );
+
+        assert_eq!(
+            Vec::<Test>::new(),
+            buffer
+                .read(&mut reader_id)
+                .rev()
+                .cloned()
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_read_wrap_around_overflow_rev() {
+        let mut buffer = RingBuffer::<Test>::new(5);
+        let mut reader_id = buffer.new_reader_id();
+        buffer.drain_vec_write(&mut events(2));
+        assert_eq!(
+            vec![Test { id: 1 }, Test { id: 0 }],
+            buffer
+                .read(&mut reader_id)
+                .rev()
+                .cloned()
+                .collect::<Vec<_>>()
+        );
+        buffer.drain_vec_write(&mut events(6));
+        // buffer should now be [2, 1, --> 0, 1]
+        assert_eq!(
+            events(6).into_iter().rev().collect::<Vec<_>>(),
+            buffer
+                .read(&mut reader_id)
+                .rev()
+                .cloned()
+                .collect::<Vec<_>>()
+        );
+
+        assert_eq!(
+            Vec::<Test>::new(),
+            buffer
+                .read(&mut reader_id)
+                .rev()
+                .cloned()
+                .collect::<Vec<_>>()
         );
     }
 
